@@ -1,0 +1,18 @@
+{
+  "name": "capstone-old",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "concurrently -k -n backend,frontend -c yellow,cyan \"npm --prefix backend start\" \"npm --prefix attendance run dev -- --host localhost --port 5173\"",
+    "dev:backend": "npm --prefix backend start",
+    "dev:frontend": "npm --prefix attendance run dev -- --host localhost --port 5173"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
