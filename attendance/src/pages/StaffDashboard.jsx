@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { AlertTriangle, BadgeCheck, BriefcaseBusiness, Clock3, LayoutDashboard, LogOut, Menu, Moon, Settings, ShieldCheck, Sun, UserCircle, X } from "lucide-react";
+import { AlertTriangle, BadgeCheck, Bell, BriefcaseBusiness, Clock3, LayoutDashboard, LogOut, Menu, Moon, Settings, ShieldCheck, Sun, UserCircle, X } from "lucide-react";
 import PageSkeleton from "../components/PageSkeleton";
 import { clearAuthSession, getAuthToken, getAuthUserFromToken } from "../utils/authSession";
 import { getNetworkBasedSkeletonDelay } from "../utils/networkSkeleton";
@@ -18,16 +18,27 @@ export default function StaffDashboard() {
     return window.matchMedia("(prefers-color-scheme: dark)").matches;
   });
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
   const [attendanceSummaryLoading, setAttendanceSummaryLoading] = useState(true);
+  const [attendanceSummaryError, setAttendanceSummaryError] = useState("");
+  const [notificationError, setNotificationError] = useState("");
+  const [attendanceRefreshKey, setAttendanceRefreshKey] = useState(0);
   const [attendanceSummary, setAttendanceSummary] = useState({
     monthLabel: "Current Month",
+    flexiTime: false,
+    shiftSchedule: "",
+    lateGraceMinutes: 1,
     expectedWorkDays: 0,
     presentDays: 0,
     onTimeDays: 0,
     lateDays: 0,
+    repeatedLatePattern: { detected: false, lateDays: 0, threshold: 3, message: null },
     absentDays: 0,
+    presentPercent: 0,
     onTimePercent: 0,
     latePercent: 0,
     absentPercent: 0
@@ -63,8 +74,12 @@ export default function StaffDashboard() {
       return;
     }
 
-    const fetchAttendanceSummary = async () => {
-      setAttendanceSummaryLoading(true);
+    const fetchDashboardData = async (showLoading = false) => {
+      if (showLoading) {
+        setAttendanceSummaryLoading(true);
+      }
+
+      let summaryLoaded = false;
 
       try {
         const res = await fetch(`${import.meta.env.VITE_API_URL}/api/attendance/my-summary`, {
@@ -75,20 +90,90 @@ export default function StaffDashboard() {
 
         const data = await res.json();
 
-        if (res.ok && data.summary) {
-          setAttendanceSummary((prev) => ({
-            ...prev,
-            ...data.summary
-          }));
+        if (!res.ok) {
+          throw new Error(data.message || data.error || "Unable to load your attendance summary.");
         }
-      } catch {
+
+        if (!data.summary) {
+          throw new Error("Attendance summary was not returned by the server.");
+        }
+
+        setAttendanceSummary((prev) => ({
+          ...prev,
+          ...data.summary
+        }));
+        setAttendanceSummaryError("");
+        summaryLoaded = true;
+
+        {
+          const notificationRes = await fetch(`${import.meta.env.VITE_API_URL}/api/attendance/my-notifications`, {
+            headers: {
+              Authorization: `Bearer ${token}`
+            }
+          });
+          const notificationData = await notificationRes.json();
+
+          if (notificationRes.ok) {
+            setNotifications(notificationData.notifications || []);
+            setUnreadNotificationCount(notificationData.unreadCount || 0);
+            setNotificationError("");
+          } else {
+            setNotificationError(notificationData.message || notificationData.error || "Unable to load notifications.");
+          }
+        }
+      } catch (error) {
+        if (summaryLoaded) {
+          setNotificationError(error.message || "Connection error while loading notifications.");
+        } else {
+          setAttendanceSummaryError(error.message || "Connection error while loading attendance.");
+        }
       } finally {
         setAttendanceSummaryLoading(false);
       }
     };
 
-    fetchAttendanceSummary();
-  }, []);
+    const handleAttendanceUpdate = () => {
+      fetchDashboardData(true);
+    };
+
+    fetchDashboardData(true);
+    window.addEventListener("attendance-data-updated", handleAttendanceUpdate);
+    const refreshTimer = setInterval(() => fetchDashboardData(), 60_000);
+
+    return () => {
+      window.removeEventListener("attendance-data-updated", handleAttendanceUpdate);
+      clearInterval(refreshTimer);
+    };
+  }, [attendanceRefreshKey]);
+
+  const handleMarkNotificationRead = async (notification) => {
+    if (notification.isRead) {
+      return;
+    }
+
+    const token = getAuthToken();
+
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/attendance/my-notifications/${notification.id}/read`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+
+      if (res.ok) {
+        setNotifications((current) => current.map((item) =>
+          item.id === notification.id ? { ...item, isRead: true } : item
+        ));
+        setUnreadNotificationCount((count) => Math.max(0, count - 1));
+        setNotificationError("");
+      } else {
+        setNotificationError("Unable to mark this notification as read.");
+      }
+    } catch (error) {
+      setNotificationError(error.message || "Connection error while updating the notification.");
+    }
+  };
 
   const handleLogout = () => {
     clearAuthSession();
@@ -107,6 +192,7 @@ export default function StaffDashboard() {
   const strongClass = isDarkMode ? "text-white" : "text-slate-900";
   const mutedClass = isDarkMode ? "text-slate-400" : "text-slate-600";
   const chipClass = isDarkMode ? "bg-slate-700/70 text-slate-200 border-slate-600" : "bg-slate-100 text-slate-700 border-slate-200";
+  const presentPercent = Math.max(0, Math.min(100, Number(attendanceSummary.presentPercent) || 0));
   const latePercent = Math.max(0, Math.min(100, Number(attendanceSummary.latePercent) || 0));
   const absentPercent = Math.max(0, Math.min(100, Number(attendanceSummary.absentPercent) || 0));
   const lateRingStyle = {
@@ -214,7 +300,7 @@ export default function StaffDashboard() {
                     }`}
                   >
                     <Icon className="w-4 h-4" />
-                      {item.label}
+                    {item.label}
                   </Link>
                 );
               })}
@@ -260,6 +346,61 @@ export default function StaffDashboard() {
               <div className="relative">
                 <button
                   type="button"
+                  onClick={() => setShowNotifications((open) => !open)}
+                  aria-label={`Notifications${unreadNotificationCount ? `, ${unreadNotificationCount} unread` : ""}`}
+                  aria-expanded={showNotifications}
+                  className={`relative inline-flex h-10 w-10 items-center justify-center rounded-lg border transition-colors ${isDarkMode ? "border-slate-600 bg-slate-700 text-slate-200 hover:bg-slate-600" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"}`}
+                >
+                  <Bell className="h-4 w-4" />
+                  {unreadNotificationCount > 0 && (
+                    <span className="absolute -right-1 -top-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
+                      {unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}
+                    </span>
+                  )}
+                </button>
+
+                {showNotifications && (
+                  <div className={`absolute right-0 z-30 mt-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border shadow-2xl ${isDarkMode ? "border-slate-700 bg-slate-800" : "border-slate-200 bg-white"}`}>
+                    <div className={`border-b px-4 py-3 text-sm font-semibold ${strongClass} ${isDarkMode ? "border-slate-700" : "border-slate-200"}`}>
+                      Notifications
+                    </div>
+                    {notificationError && (
+                      <p className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700" role="alert">
+                        {notificationError}
+                      </p>
+                    )}
+                    <div className="max-h-96 overflow-y-auto">
+                      {notifications.length === 0 ? (
+                        <p className={`px-4 py-6 text-center text-sm ${mutedClass}`}>No notifications yet.</p>
+                      ) : notifications.map((notification) => (
+                        <button
+                          key={notification.id}
+                          type="button"
+                          onClick={() => handleMarkNotificationRead(notification)}
+                          className={`block w-full border-b px-4 py-3 text-left transition-colors last:border-b-0 ${
+                            isDarkMode
+                              ? `border-slate-700 hover:bg-slate-700 ${notification.isRead ? "" : "bg-slate-700/40"}`
+                              : `border-slate-100 hover:bg-slate-50 ${notification.isRead ? "" : "bg-emerald-50/70"}`
+                          }`}
+                        >
+                          <span className={`flex items-start justify-between gap-3 text-sm font-semibold ${strongClass}`}>
+                            {notification.title}
+                            {!notification.isRead && <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-emerald-500" />}
+                          </span>
+                          <span className={`mt-1 block text-xs leading-5 ${mutedClass}`}>{notification.message}</span>
+                          <span className={`mt-2 block text-[11px] ${mutedClass}`}>
+                            {new Date(notification.createdAt).toLocaleString()}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="relative">
+                <button
+                  type="button"
                   onClick={() => setShowUserMenu((prev) => !prev)}
                   className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${isDarkMode ? "border-slate-600 bg-slate-700 text-slate-200 hover:bg-slate-600" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"}`}
                 >
@@ -291,12 +432,33 @@ export default function StaffDashboard() {
           </div>
 
           <div className="flex flex-col gap-6 p-5 md:p-8">
+            {attendanceSummaryError && (
+              <div className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${isDarkMode ? "border-red-500/30 bg-red-500/10 text-red-200" : "border-red-200 bg-red-50 text-red-700"}`} role="alert">
+                <span>{attendanceSummaryError}</span>
+                <button
+                  type="button"
+                  onClick={() => setAttendanceRefreshKey((current) => current + 1)}
+                  className={`rounded-lg border px-3 py-1.5 font-semibold transition-colors ${isDarkMode ? "border-red-400/40 hover:bg-red-500/20" : "border-red-300 hover:bg-red-100"}`}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
             <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className={`rounded-[1.35rem] border p-4 ${isDarkMode ? "border-emerald-500/30 bg-emerald-500/10" : "border-emerald-100 bg-emerald-50"}`}>
                 <p className={`text-sm ${mutedClass}`}>Present</p>
-                <p className={`mt-2 text-2xl font-bold ${strongClass}`}>
-                  {attendanceSummaryLoading ? "--" : attendanceSummary.presentDays}
-                </p>
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <p className={`text-2xl font-bold ${strongClass}`}>
+                    {attendanceSummaryLoading ? "--" : attendanceSummary.presentDays}
+                  </p>
+                  <span
+                    className={`rounded-full px-2.5 py-1 text-xs font-semibold ${isDarkMode ? "bg-emerald-500/20 text-emerald-200" : "bg-white/80 text-emerald-700"}`}
+                    aria-label={`Present rate ${attendanceSummaryLoading ? "loading" : `${presentPercent}%`}`}
+                  >
+                    {attendanceSummaryLoading ? "--" : `${presentPercent}%`}
+                  </span>
+                </div>
               </div>
               <div className={`rounded-[1.35rem] border p-4 ${isDarkMode ? "border-red-500/30 bg-red-500/10" : "border-red-100 bg-red-50"}`}>
                 <p className={`text-sm ${mutedClass}`}>Absent</p>
@@ -331,6 +493,12 @@ export default function StaffDashboard() {
                   <BadgeCheck className="w-4 h-4 text-emerald-500" />
                   {attendanceSummary.monthLabel}
                 </p>
+                {attendanceSummary.flexiTime && (
+                  <p className="mt-2 inline-flex items-center gap-2 text-xs font-semibold text-violet-600">
+                    <Clock3 className="h-4 w-4" />
+                    Flexi-time · {attendanceSummary.shiftSchedule} · {attendanceSummary.lateGraceMinutes}-minute grace
+                  </p>
+                )}
               </div>
 
               <div className={`rounded-[1.35rem] border p-5 ${isDarkMode ? "border-slate-700 bg-slate-900/50" : "border-slate-200 bg-slate-50"}`}>
@@ -373,6 +541,22 @@ export default function StaffDashboard() {
                 </div>
               </div>
             </section>
+
+            {!attendanceSummaryLoading && attendanceSummary.repeatedLatePattern?.detected && (
+              <section className={`rounded-[1.35rem] border p-4 md:p-5 ${isDarkMode ? "border-amber-500/30 bg-amber-500/10 text-amber-100" : "border-amber-200 bg-amber-50 text-amber-950"}`} role="status">
+                <div className="flex items-start gap-3">
+                  <div className={`rounded-xl p-2 ${isDarkMode ? "bg-amber-500/20" : "bg-amber-100"}`}>
+                    <AlertTriangle className="h-5 w-5 text-amber-600" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold">Repeated late pattern detected</p>
+                    <p className="mt-1 text-sm opacity-90">
+                      You have {attendanceSummary.repeatedLatePattern.lateDays} late arrivals this month, reaching the limit of {attendanceSummary.repeatedLatePattern.threshold}.
+                    </p>
+                  </div>
+                </div>
+              </section>
+            )}
 
             <section className={`rounded-[1.35rem] border p-4 md:p-5 ${isDarkMode ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-100" : "border-emerald-100 bg-emerald-50 text-emerald-900"}`}>
               <div className="flex items-start gap-3">

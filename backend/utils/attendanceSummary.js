@@ -9,25 +9,48 @@ const toTimeMinutes = (value) => {
     return null;
   }
 
-  const parts = text.split(":");
+  const match = text.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i);
 
-  if (parts.length < 2) {
+  if (!match) {
     return null;
   }
 
-  const hours = Number(parts[0]);
-  const minutes = Number(parts[1]);
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const meridiem = String(match[3] || "").toUpperCase();
 
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours > 23 || minutes > 59) {
     return null;
+  }
+
+  if (meridiem === "AM" && hours === 12) {
+    hours = 0;
+  } else if (meridiem === "PM" && hours < 12) {
+    hours += 12;
   }
 
   return hours * 60 + minutes;
 };
 
 const LATE_THRESHOLD_MINUTES = 8 * 60 + 15;
+export const FLEXI_TIME_GRACE_MINUTES = 1;
 
-const isLateRecord = (record) => {
+export const getShiftStartMinutes = (shiftSchedule) => {
+  const match = String(shiftSchedule || "").match(/(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)/i);
+  return match ? toTimeMinutes(match[1]) : null;
+};
+
+const isLateRecord = (record, { flexiTime, shiftSchedule }) => {
+  if (flexiTime) {
+    const scheduledStartMinutes = getShiftStartMinutes(shiftSchedule);
+    const candidateTime = record?.amTimeIn || record?.timeIn || record?.noonTimeIn || record?.pmTimeIn || null;
+    const minutes = toTimeMinutes(candidateTime);
+
+    if (scheduledStartMinutes !== null && minutes !== null) {
+      return minutes > scheduledStartMinutes + FLEXI_TIME_GRACE_MINUTES;
+    }
+  }
+
   const remarks = String(record?.remarks || "").trim().toLowerCase();
 
   if (remarks.includes("late")) {
@@ -58,7 +81,15 @@ const isNewUserInRange = (userCreatedAt, monthStart, rangeEnd) => {
   return createdDate >= startDate && createdDate <= endDate;
 };
 
-export const buildAttendanceSummary = ({ userCreatedAt, records, monthStart, rangeEnd, workDays }) => {
+export const buildAttendanceSummary = ({
+  userCreatedAt,
+  records,
+  monthStart,
+  rangeEnd,
+  workDays,
+  flexiTime = false,
+  shiftSchedule = ""
+}) => {
   const dailyPresence = new Map();
 
   records.forEach((record) => {
@@ -68,7 +99,7 @@ export const buildAttendanceSummary = ({ userCreatedAt, records, monthStart, ran
       return;
     }
 
-    const lateDetected = isLateRecord(record);
+    const lateDetected = isLateRecord(record, { flexiTime, shiftSchedule });
     const current = dailyPresence.get(dateKey) || false;
 
     dailyPresence.set(dateKey, current || lateDetected);

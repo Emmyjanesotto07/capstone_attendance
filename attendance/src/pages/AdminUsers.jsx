@@ -18,8 +18,9 @@ import {
   Upload,
   Download,
   FileSpreadsheet,
-  BarChart3
-  ,Wallet
+  BarChart3,
+  Wallet,
+  Clock3
 } from "lucide-react";
 import PageSkeleton from "../components/PageSkeleton";
 import { clearAuthSession, getAuthToken, getAuthUserFromToken } from "../utils/authSession";
@@ -827,6 +828,9 @@ export default function AdminUsers() {
                             <span className={`text-xs font-medium ${user.verified ? "text-blue-600" : "text-slate-500"}`}>
                               {user.verified ? "Verified" : "Unverified"}
                             </span>
+                            {user.flexiTime && (
+                              <span className="text-xs font-medium text-violet-600">Flexi-time</span>
+                            )}
                           </div>
                         </td>
                         <td className="py-3 px-2">
@@ -862,6 +866,19 @@ export default function AdminUsers() {
                             >
                               <Fingerprint className="w-3 h-3" />
                               Set Biometric ID
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => runUserAction(user.id, "flexi-time", { flexiTime: !user.flexiTime })}
+                              disabled={actionLoadingId === user.id}
+                              title="Late is based on the shift start time, with a 1-minute grace period."
+                              className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-white ${
+                                user.flexiTime ? "bg-violet-700 hover:bg-violet-800" : "bg-slate-600 hover:bg-slate-700"
+                              }`}
+                            >
+                              <Clock3 className="w-3 h-3" />
+                              {user.flexiTime ? "Disable Flexi-time" : "Enable Flexi-time"}
                             </button>
 
                             <button

@@ -17,7 +17,9 @@ import {
   AlertCircle,
   Eye,
   BarChart3,
-  Wallet
+  Wallet,
+  BrainCircuit,
+  Search
 } from "lucide-react";
 import PageSkeleton from "../components/PageSkeleton";
 import { clearAuthSession, getAuthToken, getAuthUserFromToken } from "../utils/authSession";
@@ -52,11 +54,14 @@ export default function AttendanceRecords() {
   const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [loadingEmployeeRecords, setLoadingEmployeeRecords] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  const [cscPreviewUrl, setCscPreviewUrl] = useState("");
   const [employees, setEmployees] = useState([]);
   const [selectedEmployee, setSelectedEmployee] = useState(null);
   const [selectedEmployeeRecords, setSelectedEmployeeRecords] = useState([]);
+  const [selectedEmployeeInsight, setSelectedEmployeeInsight] = useState(null);
   const [exportMonth, setExportMonth] = useState(() => String(new Date().getMonth() + 1));
   const [exportYear, setExportYear] = useState(() => String(Math.max(currentYear, 2023)));
+  const [employeeSearch, setEmployeeSearch] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const uploadFormRef = useRef(null);
@@ -174,6 +179,7 @@ export default function AttendanceRecords() {
 
       setSelectedEmployee(data.employee || employee);
       setSelectedEmployeeRecords(data.records || []);
+      setSelectedEmployeeInsight(data.aiInsight || null);
     } catch {
       setError("Connection error while loading employee attendance.");
     } finally {
@@ -184,6 +190,37 @@ export default function AttendanceRecords() {
   useEffect(() => {
     fetchEmployees();
   }, [API, token]);
+
+  useEffect(() => {
+    return () => {
+      if (cscPreviewUrl) {
+        window.URL.revokeObjectURL(cscPreviewUrl);
+      }
+    };
+  }, [cscPreviewUrl]);
+
+  const filteredEmployees = useMemo(() => {
+    const query = employeeSearch.trim().toLowerCase();
+
+    if (!query) {
+      return employees;
+    }
+
+    return employees.filter((employee) => {
+      const displayName = String(
+        employee?.completeName ||
+          employee?.CompleteName ||
+          employee?.employeeName ||
+          employee?.name ||
+          employee?.email ||
+          ""
+      ).toLowerCase();
+      const biometricId = String(employee?.employeeBiometricId || employee?.biometricId || "").toLowerCase();
+      const email = String(employee?.email || "").toLowerCase();
+
+      return displayName.includes(query) || biometricId.includes(query) || email.includes(query);
+    });
+  }, [employeeSearch, employees]);
 
   const handleUpload = async (event) => {
     event.preventDefault();
@@ -248,9 +285,10 @@ export default function AttendanceRecords() {
       }
 
       setUploadProgress(100);
-      setSuccess(`Uploaded successfully. Imported ${data.importedCount || 0}, skipped ${data.skippedCount || 0}.`);
+      setSuccess(`Uploaded successfully. Imported ${data.insertedCount ?? data.importedCount ?? 0}, updated ${data.updatedCount || 0}, already existed ${data.duplicateCount || 0}, skipped ${data.skippedCount || 0}.`);
       setFile(null);
       uploadFormRef.current?.reset();
+      window.dispatchEvent(new CustomEvent("attendance-data-updated"));
       await fetchEmployees();
 
       if (selectedEmployee?.id) {
@@ -298,6 +336,7 @@ export default function AttendanceRecords() {
 
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
+      setCscPreviewUrl(url);
       const link = document.createElement("a");
       const disposition = res.headers.get("Content-Disposition") || "";
       const matchedFileName = disposition.match(/filename="?([^";]+)"?/i);
@@ -308,7 +347,6 @@ export default function AttendanceRecords() {
       document.body.appendChild(link);
       link.click();
       link.remove();
-      window.URL.revokeObjectURL(url);
 
       setShowExportModal(false);
       setSuccess("CSC Form 48 export downloaded.");
@@ -322,6 +360,10 @@ export default function AttendanceRecords() {
   if (pageLoading) {
     return <PageSkeleton dark={isDarkMode} type="dashboard" />;
   }
+
+  const possibleTimeTheftCount = selectedEmployeeRecords.filter((record) =>
+    record.possibleTimeTheftReview?.flagged
+  ).length;
 
   return (
     <div className={`min-h-screen p-3 md:p-4 ${isDarkMode ? "bg-slate-950" : "bg-slate-100"}`}>
@@ -493,161 +535,114 @@ export default function AttendanceRecords() {
           </div>
         </aside>
 
-        <main className={`rounded-2xl shadow-sm overflow-hidden border ${
-          isDarkMode ? "bg-slate-800 border-slate-700" : "bg-white border-slate-200"
-        }`}>
-          <div className={`px-6 py-4 border-b flex items-center justify-between relative ${
-            isDarkMode ? "border-slate-700 bg-slate-800" : "border-slate-200 bg-slate-50"
-          }`}>
-            <div className="inline-flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsSidebarOpen(true)}
-                className={`md:hidden inline-flex items-center justify-center p-2 rounded-lg border ${
-                  isDarkMode
-                    ? "bg-slate-700 border-slate-600 text-slate-200"
-                    : "bg-white border-slate-300 text-slate-700"
-                }`}
-              >
-                <Menu className="w-4 h-4" />
-              </button>
-              <p className={`text-sm font-medium ${isDarkMode ? "text-slate-200" : "text-slate-700"}`}>Attendance Records</p>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setIsDarkMode((prev) => !prev)}
-                className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm transition-colors ${
-                  isDarkMode
-                    ? "bg-slate-700 border-slate-600 text-slate-200 hover:bg-slate-600"
-                    : "bg-white border-slate-300 text-slate-700 hover:bg-slate-100"
-                }`}
-              >
-                {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-                {isDarkMode ? "Light" : "Dark"}
-              </button>
-
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setShowUserMenu((prev) => !prev)}
-                  className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm transition-colors ${
-                    isDarkMode
-                      ? "bg-slate-700 border-slate-600 text-slate-200 hover:bg-slate-600"
-                      : "bg-white border-slate-300 text-slate-700 hover:bg-slate-100"
-                  }`}
-                >
-                  <UserCircle className="w-4 h-4" />
-                  User
-                </button>
-
-                {showUserMenu && (
-                  <div className={`absolute right-0 mt-2 w-48 rounded-lg border shadow-lg overflow-hidden z-20 ${
-                    isDarkMode ? "bg-slate-800 border-slate-700" : "bg-white border-slate-200"
-                  }`}>
-                    <Link
-                      to="/settings"
-                      className={`w-full px-4 py-2 text-sm inline-flex items-center gap-2 transition-colors ${
-                        isDarkMode ? "text-slate-200 hover:bg-slate-700" : "text-slate-700 hover:bg-slate-100"
-                      }`}
-                    >
-                      <Settings className="w-4 h-4" />
-                      Settings
-                    </Link>
-                    <button
-                      type="button"
-                      onClick={handleLogout}
-                      className={`w-full px-4 py-2 text-sm inline-flex items-center gap-2 transition-colors ${
-                        isDarkMode ? "text-red-300 hover:bg-slate-700" : "text-red-600 hover:bg-slate-100"
-                      }`}
-                    >
-                      <LogOut className="w-4 h-4" />
-                      Logout
-                    </button>
-                  </div>
-                )}
+        <main className="min-w-0 flex-1">
+          <div className="p-6 md:p-8">
+            <div className="mb-6 flex items-center gap-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50 text-blue-600 shadow-sm">
+                <FileSpreadsheet className="h-6 w-6" />
               </div>
-            </div>
-          </div>
-
-          <div className="p-6 md:p-8 space-y-5">
-            <div>
-              <h1 className={`text-3xl font-bold flex items-center gap-2 ${isDarkMode ? "text-white" : "text-slate-900"}`}>
-                <FileSpreadsheet className="w-8 h-8 text-blue-600" />
-                Attendance Records
-              </h1>
-              <p className={`${isDarkMode ? "text-slate-400" : "text-slate-600"} mt-2`}>
-                Upload attendance files and export records into CSC Form 48 PDF format.
-              </p>
+              <div>
+                <h1 className="text-[2rem] font-bold tracking-[-0.04em] text-slate-800">Attendance Records</h1>
+                <p className="mt-1 text-sm text-slate-500">Upload attendance files and export records into CSC Form 48 PDF format.</p>
+              </div>
             </div>
 
             {error && (
-              <div className={`rounded-lg border p-3 text-sm inline-flex items-center gap-2 ${isDarkMode ? "bg-red-500/10 border-red-500/30 text-red-200" : "bg-red-50 border-red-200 text-red-700"}`}>
-                <AlertCircle className="w-4 h-4" />
-                {error}
+              <div className="mb-5 flex items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="h-4 w-4" />
+                  {error}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setError("")}
+                  className="text-emerald-700 transition hover:text-emerald-900"
+                  aria-label="Dismiss message"
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </div>
             )}
 
             {success && (
-              <div className={`rounded-lg border p-3 text-sm inline-flex items-center gap-2 ${isDarkMode ? "bg-green-500/10 border-green-500/30 text-green-200" : "bg-green-50 border-green-200 text-green-700"}`}>
-                <CheckCircle className="w-4 h-4" />
-                {success}
+              <div className="mb-5 flex items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="h-4 w-4" />
+                  {success}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSuccess("")}
+                  className="text-emerald-700 transition hover:text-emerald-900"
+                  aria-label="Dismiss message"
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </div>
             )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <form onSubmit={handleUpload} className={`rounded-xl border p-5 space-y-4 ${
-                isDarkMode ? "border-slate-700 bg-slate-700/20" : "border-slate-200 bg-slate-50"
-              }`} ref={uploadFormRef}>
-                <h2 className={`text-lg font-semibold ${isDarkMode ? "text-white" : "text-slate-900"}`}>Upload Attendance</h2>
-                <p className={`text-sm ${isDarkMode ? "text-slate-300" : "text-slate-600"}`}>
-                  For DAT/CSV uploads without headers: column 1 is biometric employee ID, column 2 is date, column 3 is time, and other columns are ignored. The uploader auto-assigns punches into AM time-in, noon time-out, noon time-in, and PM time-out per employee and date.
-                </p>
+            <div className="grid gap-5 xl:grid-cols-2">
+              <form onSubmit={handleUpload} ref={uploadFormRef} className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+                <div className="mb-4 flex items-start gap-4">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                    <Upload className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h2 className="text-[1.1rem] font-bold text-slate-800">Upload Attendance</h2>
+                    <p className="mt-1 text-sm leading-6 text-slate-500">
+                      For DAT/CSV uploads without headers: column 1 is biometric employee ID, column 2 is date, column 3 is time, and other columns are ignored. The uploader auto-assigns punches into AM time-in, noon time-out, noon time-in, and PM time-out per employee and date.
+                    </p>
+                  </div>
+                </div>
 
-                <input
-                  type="file"
-                  accept=".csv,.dat,.txt,text/csv,text/plain"
-                  onChange={(event) => {
-                    const selected = event.target.files?.[0] || null;
-                    setFile(selected);
-                  }}
-                  className={`w-full px-3 py-2 rounded-lg border text-sm ${
-                    isDarkMode ? "bg-slate-800 border-slate-600 text-white" : "bg-white border-slate-300 text-slate-900"
-                  }`}
-                />
+                <label className="mt-4 flex min-h-[200px] cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-blue-200 bg-blue-50/40 px-4 py-8 text-center transition hover:border-blue-300 hover:bg-blue-50">
+                  <input
+                    type="file"
+                    accept=".csv,.dat,.txt,text/csv,text/plain"
+                    className="hidden"
+                    onChange={(event) => {
+                      const selected = event.target.files?.[0] || null;
+                      setFile(selected);
+                    }}
+                  />
+                  <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-white text-blue-600 shadow-sm">
+                    <Upload className="h-6 w-6" />
+                  </div>
+                  <p className="text-lg font-semibold text-slate-700">{file ? file.name : "Choose File No file chosen"}</p>
+                  <p className="mt-2 text-sm text-slate-500">Drag and drop a file or click to browse</p>
+                </label>
 
                 <button
                   type="submit"
                   disabled={uploading || !file}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white"
+                  className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {uploading ? <Loader className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                  {uploading ? <Loader className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
                   Upload Records
                 </button>
 
                 {(uploading || uploadProgress > 0) && (
-                  <div className="space-y-1">
-                    <div className={`w-full h-2 rounded-full overflow-hidden ${isDarkMode ? "bg-slate-700" : "bg-slate-200"}`}>
-                      <div
-                        className="h-full bg-blue-600 transition-all duration-200"
-                        style={{ width: `${uploadProgress}%` }}
-                      />
+                  <div className="mt-4 space-y-2">
+                    <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
+                      <div className="h-full rounded-full bg-blue-600 transition-all duration-200" style={{ width: `${uploadProgress}%` }} />
                     </div>
-                    <p className={`text-xs ${isDarkMode ? "text-slate-300" : "text-slate-600"}`}>
-                      Uploading... {uploadProgress}%
-                    </p>
+                    <p className="text-xs text-slate-500">Uploading... {uploadProgress}%</p>
                   </div>
                 )}
               </form>
 
-              <div className={`rounded-xl border p-5 space-y-4 ${
-                isDarkMode ? "border-slate-700 bg-slate-700/20" : "border-slate-200 bg-slate-50"
-              }`}>
-                <h2 className={`text-lg font-semibold ${isDarkMode ? "text-white" : "text-slate-900"}`}>Export CSC Form 48</h2>
-                <p className={`text-sm ${isDarkMode ? "text-slate-400" : "text-slate-600"}`}>
-                  Export attendance records for a specific month and year as a CSC Form 48 PDF file.
-                </p>
+              <div className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+                <div className="mb-4 flex items-start gap-4">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
+                    <FileDown className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h2 className="text-[1.1rem] font-bold text-slate-800">Export CSC Form 48</h2>
+                    <p className="mt-1 text-sm leading-6 text-slate-500">
+                      Export attendance records for a specific month and year as a CSC Form 48 PDF file.
+                    </p>
+                  </div>
+                </div>
 
                 <button
                   type="button"
@@ -657,200 +652,171 @@ export default function AttendanceRecords() {
                     setShowExportModal(true);
                   }}
                   disabled={exporting}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white"
+                  className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {exporting ? <Loader className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+                  {exporting ? <Loader className="h-4 w-4 animate-spin" /> : <FileDown className="h-4 w-4" />}
                   Export Form 48 PDF
                 </button>
+
+                <div className="mt-6 flex items-center justify-center rounded-[22px] bg-gradient-to-br from-emerald-50 via-white to-emerald-100 p-6">
+                  <div className="relative h-28 w-28 rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
+                    <div className="absolute inset-0 rounded-2xl bg-slate-50/60" />
+                    <div className="absolute inset-4 rounded-xl border border-dashed border-slate-200 bg-white" />
+                    <div className="absolute inset-x-5 bottom-4 flex items-center justify-between rounded-lg bg-white px-2 py-1 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-500 shadow-sm ring-1 ring-slate-200">
+                      <span>PDF</span>
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500 text-white">
+                        <FileDown className="h-3.5 w-3.5" />
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
-            {showExportModal && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                <div className="absolute inset-0 bg-black/50" onClick={() => !exporting && setShowExportModal(false)}></div>
-                <div className={`relative w-full max-w-sm rounded-xl border p-5 space-y-4 shadow-xl ${
-                  isDarkMode ? "bg-slate-800 border-slate-700" : "bg-white border-slate-200"
-                }`}>
-                  <h3 className={`text-base font-semibold ${isDarkMode ? "text-white" : "text-slate-900"}`}>Export CSC Form 48</h3>
-
-                  <div className="space-y-3">
-                    <div className="space-y-1">
-                      <label className={`text-xs font-medium ${isDarkMode ? "text-slate-300" : "text-slate-600"}`}>Month</label>
-                      <select
-                        value={exportMonth}
-                        onChange={(event) => setExportMonth(event.target.value)}
-                        className={`w-full px-3 py-2 rounded-lg border text-sm ${
-                          isDarkMode ? "bg-slate-700 border-slate-600 text-white" : "bg-white border-slate-300 text-slate-900"
-                        }`}
-                      >
-                        {monthOptions.map((month) => (
-                          <option key={month.value} value={month.value}>
-                            {month.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className={`text-xs font-medium ${isDarkMode ? "text-slate-300" : "text-slate-600"}`}>Year</label>
-                      <select
-                        value={exportYear}
-                        onChange={(event) => setExportYear(event.target.value)}
-                        className={`w-full px-3 py-2 rounded-lg border text-sm ${
-                          isDarkMode ? "bg-slate-700 border-slate-600 text-white" : "bg-white border-slate-300 text-slate-900"
-                        }`}
-                      >
-                        {yearOptions.map((year) => (
-                          <option key={year} value={year}>
-                            {year}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+            <div className="mt-6 rounded-[26px] border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                    <UserCircle className="h-5 w-5" />
                   </div>
-
-                  <div className="flex justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowExportModal(false)}
-                      disabled={exporting}
-                      className={`px-3 py-2 rounded-lg border text-sm ${
-                        isDarkMode
-                          ? "border-slate-600 text-slate-200 hover:bg-slate-700"
-                          : "border-slate-300 text-slate-700 hover:bg-slate-100"
-                      }`}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleExport}
-                      disabled={exporting || !String(exportMonth).trim() || !String(exportYear).trim()}
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm"
-                    >
-                      {exporting ? <Loader className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
-                      Export
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className={`rounded-xl border p-5 space-y-4 ${
-              isDarkMode ? "border-slate-700 bg-slate-700/20" : "border-slate-200 bg-slate-50"
-            }`}>
-              <div className="flex items-center justify-between">
-                <h2 className={`text-lg font-semibold ${isDarkMode ? "text-white" : "text-slate-900"}`}>
-                  Employees
-                </h2>
-                {loadingEmployees && <Loader className="w-4 h-4 animate-spin text-blue-500" />}
-              </div>
-
-              <div className={`rounded-lg border overflow-hidden ${
-                isDarkMode ? "border-slate-700" : "border-slate-200"
-              }`}>
-<div className={`grid grid-cols-[1.4fr_1fr_auto_auto] gap-3 px-4 py-2 text-xs font-semibold uppercase ${
-                   isDarkMode ? "bg-slate-800 text-slate-300" : "bg-slate-100 text-slate-600"
-                 }`}>
-                   <span>Employee</span>
-                   <span>Biometric ID</span>
-                   <span>Records</span>
-                   <span className="text-right">Action</span>
+                  <h2 className="text-[1.2rem] font-bold text-slate-800">Employees</h2>
                 </div>
 
-                <div className={`max-h-64 overflow-y-auto ${isDarkMode ? "bg-slate-900/20" : "bg-white"}`}>
-                  {employees.length === 0 && !loadingEmployees ? (
-                    <div className={`px-4 py-3 text-sm ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
-                      No employees found.
-                    </div>
-                  ) : (
-                    employees.filter(emp => {
-                      const name = emp.completeName?.toLowerCase() || "";
-                      return !name.includes("cabrera") && !name.includes("xian");
-                    }).map((employee) => (
-                      <div
-                        key={employee.id}
-                        className={`grid grid-cols-[1.4fr_1fr_auto_auto] gap-3 px-4 py-3 text-sm border-t first:border-t-0 ${
-                          isDarkMode ? "border-slate-700 text-slate-200" : "border-slate-200 text-slate-700"
-                        }`}
-                      >
-                        <div>
-                          <p className="font-medium">{employee.completeName || employee.email}</p>
-                        </div>
-                        <span>{employee.employeeBiometricId || "—"}</span>
-                        <span>{employee.recordCount || 0}</span>
-                        <div className="text-right">
-                          <button
-                            type="button"
-                            onClick={() => handleViewEmployeeAttendance(employee)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs bg-blue-600 hover:bg-blue-700 text-white"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                            View
-                          </button>
-                        </div>
+                <div className="relative w-full max-w-xs">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={employeeSearch}
+                    onChange={(event) => setEmployeeSearch(event.target.value)}
+                    placeholder="Search employee..."
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-blue-300 focus:bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-2xl border border-slate-200">
+                <div className="grid grid-cols-[1.8fr_1.2fr_0.8fr_0.9fr] gap-4 bg-slate-100 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-500">
+                  <span>Employee</span>
+                  <span>Biometric ID</span>
+                  <span>Records</span>
+                  <span className="text-right">Action</span>
+                </div>
+
+                {filteredEmployees.length === 0 ? (
+                  <div className="px-4 py-4 text-sm text-slate-500">No employees found.</div>
+                ) : (
+                  filteredEmployees.map((employee) => (
+                    <div
+                      key={employee.id}
+                      className="grid grid-cols-[1.8fr_1.2fr_0.8fr_0.9fr] items-center gap-4 border-t border-slate-200 bg-white px-4 py-3 text-sm text-slate-700"
+                    >
+                      <div className="font-medium text-slate-800">
+                        {employee.completeName || employee.CompleteName || employee.employeeName || employee.name || employee.email || "Employee"}
                       </div>
-                    ))
-                  )}
-                </div>
+                      <div>{employee.employeeBiometricId || employee.biometricId || "—"}</div>
+                      <div>{employee.recordCount || 0}</div>
+                      <div className="text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleViewEmployeeAttendance(employee)}
+                          className="inline-flex items-center justify-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-blue-700"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          View
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
 
-            <div className={`rounded-xl border p-5 space-y-4 ${
-              isDarkMode ? "border-slate-700 bg-slate-700/20" : "border-slate-200 bg-slate-50"
-            }`}>
-              <div className="flex items-center justify-between">
-                <h2 className={`text-lg font-semibold ${isDarkMode ? "text-white" : "text-slate-900"}`}>
-                  {selectedEmployee ? `${selectedEmployee.completeName} Attendance` : "Employee Attendance"}
-                </h2>
-                {loadingEmployeeRecords && <Loader className="w-4 h-4 animate-spin text-blue-500" />}
-              </div>
+            {selectedEmployee && (
+              <div className="mt-6 rounded-[26px] border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <h2 className="text-[1.2rem] font-bold text-slate-800">
+                    {selectedEmployee.completeName || selectedEmployee.CompleteName || selectedEmployee.employeeName || selectedEmployee.name || "Employee"} Attendance
+                  </h2>
+                  {loadingEmployeeRecords && <Loader className="h-4 w-4 animate-spin text-blue-500" />}
+                </div>
 
-              {!selectedEmployee ? (
-                <p className={`text-sm ${isDarkMode ? "text-slate-400" : "text-slate-600"}`}>
-                  Select an employee above to view attendance records.
-                </p>
-              ) : (
-                <div className={`rounded-lg border overflow-hidden ${
-                  isDarkMode ? "border-slate-700" : "border-slate-200"
-                }`}>
-                  <div className={`grid grid-cols-[90px_repeat(4,minmax(0,1fr))_1.2fr] gap-2 px-3 py-2 text-[11px] font-semibold uppercase ${
-                    isDarkMode ? "bg-slate-800 text-slate-300" : "bg-slate-100 text-slate-600"
+                {selectedEmployeeInsight && (
+                  <div className={`mb-4 rounded-2xl border p-4 ${
+                    selectedEmployeeInsight.severity === "high"
+                      ? "border-red-200 bg-red-50"
+                      : selectedEmployeeInsight.severity === "medium"
+                        ? "border-amber-200 bg-amber-50"
+                        : "border-emerald-200 bg-emerald-50"
                   }`}>
+                    <div className="flex items-start gap-3">
+                      <BrainCircuit className={`mt-0.5 h-5 w-5 ${selectedEmployeeInsight.severity === "high" ? "text-red-500" : selectedEmployeeInsight.severity === "medium" ? "text-amber-500" : "text-emerald-500"}`} />
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">
+                          AI Attendance Insight: <span className="capitalize">{selectedEmployeeInsight.severity}</span> risk ({selectedEmployeeInsight.score || 0}/100)
+                        </p>
+                        <p className="mt-1 text-sm text-slate-600">{selectedEmployeeInsight.reason || "No anomaly details available."}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {possibleTimeTheftCount > 0 && (
+                  <div className="mb-4 rounded-2xl border border-amber-300 bg-amber-50 p-4" role="status">
+                    <p className="text-sm font-semibold text-amber-900">
+                      Possible time-theft indicators on {possibleTimeTheftCount} attendance {possibleTimeTheftCount === 1 ? "record" : "records"}
+                    </p>
+                    <p className="mt-1 text-sm text-amber-800">
+                      These are review signals, not proof of misconduct. Verify the biometric source records and context before taking action.
+                    </p>
+                  </div>
+                )}
+
+                <div className="overflow-x-auto rounded-2xl border border-slate-200">
+                  <div className="grid min-w-[1100px] grid-cols-[90px_repeat(4,minmax(0,1fr))_1.2fr_1.6fr] gap-2 bg-slate-100 px-3 py-2 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-500">
                     <span>Date</span>
                     <span>AM In</span>
                     <span>AM Out</span>
                     <span>PM In</span>
                     <span>PM Out</span>
                     <span>Remarks</span>
+                    <span>Possible time theft</span>
                   </div>
 
-                  <div className={`max-h-80 overflow-y-auto ${isDarkMode ? "bg-slate-900/20" : "bg-white"}`}>
+                  <div className="max-h-80 overflow-y-auto bg-white">
                     {selectedEmployeeRecords.length === 0 && !loadingEmployeeRecords ? (
-                      <div className={`px-4 py-3 text-sm ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
-                        No attendance records for this employee.
-                      </div>
+                      <div className="px-4 py-3 text-sm text-slate-500">No attendance records for this employee.</div>
                     ) : (
                       selectedEmployeeRecords.map((record) => (
-                        <div
-                          key={record.id}
-                          className={`grid grid-cols-[90px_repeat(4,minmax(0,1fr))_1.2fr] gap-2 px-3 py-2 text-sm border-t first:border-t-0 ${
-                            isDarkMode ? "border-slate-700 text-slate-200" : "border-slate-200 text-slate-700"
-                          }`}
-                        >
-                          <span>{record.attendanceDate}</span>
+                        <div key={record.id} className="grid min-w-[1100px] grid-cols-[90px_repeat(4,minmax(0,1fr))_1.2fr_1.6fr] gap-2 border-t border-slate-200 px-3 py-2 text-sm text-slate-700">
+                          <span>{record.attendanceDate || "—"}</span>
                           <span>{record.amTimeIn || "—"}</span>
                           <span>{record.amTimeOut || record.noonTimeOut || "—"}</span>
                           <span>{record.pmTimeIn || record.noonTimeIn || "—"}</span>
                           <span>{record.pmTimeOut || "—"}</span>
                           <span>{record.remarks || "—"}</span>
+                          <span className="space-y-1">
+                            {record.possibleTimeTheftReview?.flagged ? (
+                              <>
+                                <span className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+                                  Review required
+                                </span>
+                                {record.possibleTimeTheftReview.reasons.map((reason) => (
+                                  <span key={reason} className="block text-xs leading-5 text-amber-800">
+                                    {reason}
+                                  </span>
+                                ))}
+                              </>
+                            ) : (
+                              <span className="text-xs text-slate-500">No indicators</span>
+                            )}
+                          </span>
                         </div>
                       ))
                     )}
                   </div>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </main>
       </div>

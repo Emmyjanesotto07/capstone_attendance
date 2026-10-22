@@ -257,6 +257,27 @@ const ensureSalaryProfileColumns = async () => {
   }
 };
 
+const ensureUserEmploymentColumns = async () => {
+  const queryInterface = sequelize.getQueryInterface();
+  const tableName = "Users";
+  const columns = await queryInterface.describeTable(tableName);
+  const employmentColumns = [
+    ["contactNumber", { type: DataTypes.STRING, allowNull: true }],
+    ["emergencyContact", { type: DataTypes.STRING, allowNull: true }],
+    ["department", { type: DataTypes.STRING, allowNull: true }],
+    ["position", { type: DataTypes.STRING, allowNull: true }],
+    ["employeeCategory", { type: DataTypes.ENUM("regular", "cos", "job_order"), allowNull: true }],
+    ["shiftSchedule", { type: DataTypes.STRING, allowNull: true }],
+    ["flexiTime", { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false }]
+  ];
+
+  for (const [name, definition] of employmentColumns) {
+    if (!columns[name]) {
+      await queryInterface.addColumn(tableName, name, definition);
+    }
+  }
+};
+
 const startServer = async () => {
   try {
     await sequelize.authenticate();
@@ -273,6 +294,7 @@ const startServer = async () => {
 
     await ensureSalaryRecordColumns();
     await ensureSalaryProfileColumns();
+    await ensureUserEmploymentColumns();
 
     app.listen(PORT, () => {
       console.log("Server running on port", PORT);

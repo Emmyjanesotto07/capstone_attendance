@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { ArrowRight, BarChart3, BadgeCheck, FileSpreadsheet, LayoutDashboard, LogOut, Menu, Settings, ShieldCheck, Sun, Moon, UserCircle, Users, Wallet, X } from "lucide-react";
+import { ArrowRight, AlertTriangle, BarChart3, BadgeCheck, BriefcaseBusiness, Clock3, FileSpreadsheet, LayoutDashboard, LogOut, Menu, Settings, ShieldCheck, Sun, Moon, UserCircle, Users, Wallet, X } from "lucide-react";
 import PageSkeleton from "../components/PageSkeleton";
 import { clearAuthSession, getAuthToken, getAuthUserFromToken } from "../utils/authSession";
 import { getNetworkBasedSkeletonDelay } from "../utils/networkSkeleton";
@@ -22,6 +22,7 @@ export default function AdminDashboard() {
   const [pageLoading, setPageLoading] = useState(true);
   const [attendanceLoading, setAttendanceLoading] = useState(true);
   const [totalEmployees, setTotalEmployees] = useState(0);
+  const [presentCount, setPresentCount] = useState(0);
   const [onTimeCount, setOnTimeCount] = useState(0);
   const [lateCount, setLateCount] = useState(0);
   const [absentCount, setAbsentCount] = useState(0);
@@ -90,38 +91,32 @@ export default function AdminDashboard() {
       return h * 60 + m;
     };
 
-    const detectLateSample = async (presentUsers) => {
-      const sample = presentUsers.slice(0, 8);
-      let checked = 0;
-      let lateDetected = 0;
-
-      for (const u of sample) {
+    const countLateEmployees = async (presentUsers, attendanceDate) => {
+      const lateResults = await Promise.all(presentUsers.map(async (employee) => {
         try {
           const token = getAuthToken();
-          const res = await fetch(`${import.meta.env.VITE_API_URL}/api/attendance/employees/${u.id}`, {
+          const res = await fetch(`${import.meta.env.VITE_API_URL}/api/attendance/employees/${employee.id}`, {
             headers: { Authorization: `Bearer ${token}` }
           });
 
-          if (!res.ok) continue;
+          if (!res.ok) return false;
+
           const data = await res.json();
-          const recordToday = (data.records || []).find((r) => String(r.attendanceDate || "").slice(0, 10) === new Date().toISOString().slice(0, 10));
+          const record = (data.records || []).find((item) => String(item.attendanceDate || "").slice(0, 10) === attendanceDate);
 
-          if (!recordToday) continue;
+          if (!record) return false;
 
-          const timeText = recordToday.amTimeIn || recordToday.timeIn || recordToday.pmTimeIn || null;
+          const remarks = String(record.remarks || "").toLowerCase();
+          const timeText = record.amTimeIn || record.timeIn || record.pmTimeIn || null;
           const minutes = toMinutes(timeText);
-          if (minutes !== null) {
-            checked += 1;
-            // threshold 8:15am => 495 minutes
-            if (minutes > 495) {
-              lateDetected += 1;
-            }
-          }
-        } catch (err) {
-        }
-      }
 
-      return checked > 0 ? lateDetected / checked : 0;
+          return remarks.includes("late") || (minutes !== null && minutes > 495);
+        } catch {
+          return false;
+        }
+      }));
+
+      return lateResults.filter(Boolean).length;
     };
 
     const fetchAttendanceOverview = async () => {
@@ -143,18 +138,24 @@ export default function AdminDashboard() {
 
         if (cancelled) return;
 
-        const today = new Date().toISOString().slice(0, 10);
-        const present = employees.filter((e) => String(e.latestAttendanceDate || "").slice(0, 10) === today);
+        const latestAttendanceDate = employees
+          .map((employee) => String(employee.latestAttendanceDate || "").slice(0, 10))
+          .filter(Boolean)
+          .sort()
+          .at(-1);
+        const present = latestAttendanceDate
+          ? employees.filter((employee) => String(employee.latestAttendanceDate || "").slice(0, 10) === latestAttendanceDate)
+          : [];
         const total = employees.length;
         const presentCount = present.length;
 
-        const lateRatio = await detectLateSample(present);
-
-        const approxLate = Math.round(presentCount * lateRatio);
+        const lateCount = latestAttendanceDate ? await countLateEmployees(present, latestAttendanceDate) : 0;
+        const lateRatio = presentCount > 0 ? lateCount / presentCount : 0;
 
         setTotalEmployees(total);
-        setOnTimeCount(Math.max(0, presentCount - approxLate));
-        setLateCount(approxLate);
+        setPresentCount(presentCount);
+        setOnTimeCount(Math.max(0, presentCount - lateCount));
+        setLateCount(lateCount);
         setAbsentCount(Math.max(0, total - presentCount));
 
         // Calculate monthly stats for last 6 months
@@ -180,12 +181,10 @@ export default function AdminDashboard() {
           }
         });
 
-        // Calculate absent and late for each month
         Object.keys(monthlyMap).forEach((month) => {
           const totalEmployees = employees.length;
           monthlyMap[month].total = totalEmployees;
           monthlyMap[month].absent = totalEmployees - monthlyMap[month].present;
-          // Estimate late as portion of present (using sampled ratio)
           const estimatedLate = Math.round(monthlyMap[month].present * lateRatio);
           monthlyMap[month].late = estimatedLate;
           monthlyMap[month].ontime = monthlyMap[month].present - estimatedLate;
@@ -196,7 +195,7 @@ export default function AdminDashboard() {
           const latePercent = data.total > 0 ? Math.round((data.late / data.total) * 100) : 0;
           const absentPercent = data.total > 0 ? Math.round((data.absent / data.total) * 100) : 0;
           return {
-            month: month.slice(5), // MM only
+            month: month.slice(5),
             onTimePercent,
             latePercent,
             absentPercent,
@@ -213,10 +212,18 @@ export default function AdminDashboard() {
       }
     };
 
+    const handleAttendanceUpdate = () => {
+      fetchAttendanceOverview();
+    };
+
     fetchAttendanceOverview();
+    window.addEventListener("attendance-data-updated", handleAttendanceUpdate);
+    const refreshTimer = setInterval(fetchAttendanceOverview, 60_000);
 
     return () => {
       cancelled = true;
+      window.removeEventListener("attendance-data-updated", handleAttendanceUpdate);
+      clearInterval(refreshTimer);
     };
   }, []);
 
@@ -248,6 +255,15 @@ export default function AdminDashboard() {
   const logoutClass = isDarkMode
     ? "bg-slate-950/80 text-white hover:bg-slate-900 border-slate-800"
     : "bg-slate-900 text-white hover:bg-slate-800 border-slate-900";
+  const onTimePercent = totalEmployees > 0 ? Math.round((onTimeCount / totalEmployees) * 100) : 0;
+  const absentPercent = totalEmployees > 0 ? Math.round((absentCount / totalEmployees) * 100) : 0;
+  const monthLabel = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(new Date());
+  const onTimeRingStyle = {
+    background: `conic-gradient(#10b981 ${onTimePercent}%, ${isDarkMode ? "#334155" : "#e2e8f0"} 0)`
+  };
+  const absentRingStyle = {
+    background: `conic-gradient(#ef4444 ${absentPercent}%, ${isDarkMode ? "#334155" : "#e2e8f0"} 0)`
+  };
 
   return (
     <div className={`relative min-h-screen overflow-hidden p-3 md:p-4 transition-colors duration-300 ${shellClass}`}>
@@ -446,119 +462,49 @@ export default function AdminDashboard() {
           </div>
 
           <div className="flex flex-col gap-6 p-5 md:p-8">
-            
-            <section className={`rounded-[1.35rem] border p-4 md:p-6 ${isDarkMode ? "border-slate-700 bg-slate-900/50" : "border-slate-200 bg-white/80"}`}>
-              <h3 className={`text-lg font-semibold ${strongClass}`}>Employee Attendance Dashboard</h3>
-              <p className={`text-sm ${mutedClass}`}>Quick overview of employee attendance and recent activity.</p>
-
-              <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-4">
-                <div className="rounded-lg p-4 text-white bg-sky-500">
-                  <p className="text-sm opacity-90">Total Employees</p>
-                  <p className="mt-2 text-2xl font-bold">{attendanceLoading ? <span className="inline-block h-6 w-16 animate-pulse rounded bg-white/30" /> : totalEmployees}</p>
-                </div>
-                <div className="rounded-lg p-4 text-white bg-emerald-500">
-                  <p className="text-sm opacity-90">On-Time</p>
-                  <p className="mt-2 text-2xl font-bold">{attendanceLoading ? <span className="inline-block h-6 w-16 animate-pulse rounded bg-white/30" /> : onTimeCount}</p>
-                </div>
-                <div className="rounded-lg p-4 text-white bg-red-500">
-                  <p className="text-sm opacity-90">Late</p>
-                  <p className="mt-2 text-2xl font-bold">{attendanceLoading ? <span className="inline-block h-6 w-16 animate-pulse rounded bg-white/30" /> : lateCount}</p>
-                </div>
-                <div className="rounded-lg p-4 text-white bg-amber-500">
-                  <p className="text-sm opacity-90">Absent</p>
-                  <p className="mt-2 text-2xl font-bold">{attendanceLoading ? <span className="inline-block h-6 w-16 animate-pulse rounded bg-white/30" /> : absentCount}</p>
-                </div>
+            <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+              <div className={`rounded-[1.35rem] border p-4 ${isDarkMode ? "border-emerald-500/30 bg-emerald-500/10" : "border-emerald-100 bg-emerald-50"}`}>
+                <p className={`text-sm ${mutedClass}`}>Total employees</p>
+                <p className={`mt-2 text-2xl font-bold ${strongClass}`}>{attendanceLoading ? "--" : totalEmployees}</p>
               </div>
-
-              <div className="mt-6 rounded-lg border p-6 bg-transparent">
-                <p className={`text-sm font-semibold ${mutedClass} mb-4`}>ATTENDANCE</p>
-                <div className="flex flex-col gap-8 lg:flex-row lg:items-center">
-                  {/* Donut Chart */}
-                  <div className="flex-1 flex justify-center">
-                    <div className="relative w-48 h-48">
-                      <svg viewBox="0 0 100 100" className="w-full h-full transform -rotate-90">
-                        {attendanceLoading ? (
-                          <circle cx="50" cy="50" r="40" fill="none" stroke="#e2e8f0" strokeWidth="12" opacity="0.3" />
-                        ) : (
-                          <>
-                            {/* Present (Green) */}
-                            {onTimeCount > 0 && (
-                              <circle
-                                cx="50"
-                                cy="50"
-                                r="40"
-                                fill="none"
-                                stroke="#10b981"
-                                strokeWidth="12"
-                                strokeDasharray={`${(onTimeCount / totalEmployees) * 251.2} 251.2`}
-                                strokeLinecap="round"
-                              />
-                            )}
-                            {/* Late (Orange) */}
-                            {lateCount > 0 && (
-                              <circle
-                                cx="50"
-                                cy="50"
-                                r="40"
-                                fill="none"
-                                stroke="#f97316"
-                                strokeWidth="12"
-                                strokeDasharray={`${(lateCount / totalEmployees) * 251.2} 251.2`}
-                                strokeDashoffset={`-${(onTimeCount / totalEmployees) * 251.2}`}
-                                strokeLinecap="round"
-                              />
-                            )}
-                            {/* Absent (Red) */}
-                            {absentCount > 0 && (
-                              <circle
-                                cx="50"
-                                cy="50"
-                                r="40"
-                                fill="none"
-                                stroke="#ef4444"
-                                strokeWidth="12"
-                                strokeDasharray={`${(absentCount / totalEmployees) * 251.2} 251.2`}
-                                strokeDashoffset={`-${((onTimeCount + lateCount) / totalEmployees) * 251.2}`}
-                                strokeLinecap="round"
-                              />
-                            )}
-                          </>
-                        )}
-                      </svg>
-                      {/* Center text */}
-                      <div className="absolute inset-0 flex flex-col items-center justify-center">
-                        <p className={`text-2xl font-bold ${strongClass}`}>{onTimeCount + lateCount}/{totalEmployees}</p>
-                        <p className={`text-xs ${mutedClass}`}>Present</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Legend */}
-                  <div className="flex-1 space-y-3">
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-4 h-4 rounded bg-emerald-500"></div>
-                        <p className={`text-sm font-medium ${strongClass}`}>Present</p>
-                      </div>
-                      <p className={`text-sm ${mutedClass}`}>{onTimeCount} ({totalEmployees > 0 ? Math.round((onTimeCount / totalEmployees) * 100) : 0}%)</p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-4 h-4 rounded bg-orange-500"></div>
-                        <p className={`text-sm font-medium ${strongClass}`}>Late</p>
-                      </div>
-                      <p className={`text-sm ${mutedClass}`}>{lateCount} ({totalEmployees > 0 ? Math.round((lateCount / totalEmployees) * 100) : 0}%)</p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-4 h-4 rounded bg-red-500"></div>
-                        <p className={`text-sm font-medium ${strongClass}`}>Absent</p>
-                      </div>
-                      <p className={`text-sm ${mutedClass}`}>{absentCount} ({totalEmployees > 0 ? Math.round((absentCount / totalEmployees) * 100) : 0}%)</p>
-                    </div>
-                  </div>
-                </div>
+              <div className={`rounded-[1.35rem] border p-4 ${isDarkMode ? "border-emerald-500/30 bg-emerald-500/10" : "border-emerald-100 bg-emerald-50"}`}>
+                <p className={`text-sm ${mutedClass}`}>Present</p>
+                <p className={`mt-2 text-2xl font-bold ${strongClass}`}>{attendanceLoading ? "--" : presentCount}</p>
               </div>
+              <div className={`rounded-[1.35rem] border p-4 ${isDarkMode ? "border-emerald-500/30 bg-emerald-500/10" : "border-emerald-100 bg-emerald-50"}`}>
+                <p className={`text-sm ${mutedClass}`}>On-time</p>
+                <p className={`mt-2 text-2xl font-bold ${strongClass}`}>{attendanceLoading ? "--" : onTimeCount}</p>
+              </div>
+              <div className={`rounded-[1.35rem] border p-4 ${isDarkMode ? "border-amber-500/30 bg-amber-500/10" : "border-amber-100 bg-amber-50"}`}>
+                <p className={`text-sm ${mutedClass}`}>Late</p>
+                <p className={`mt-2 text-2xl font-bold ${strongClass}`}>{attendanceLoading ? "--" : lateCount}</p>
+              </div>
+              <div className={`rounded-[1.35rem] border p-4 ${isDarkMode ? "border-red-500/30 bg-red-500/10" : "border-red-100 bg-red-50"}`}>
+                <p className={`text-sm ${mutedClass}`}>Absent</p>
+                <p className={`mt-2 text-2xl font-bold ${strongClass}`}>{attendanceLoading ? "--" : absentCount}</p>
+              </div>
+            </section>
+
+            <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <div className={`rounded-[1.35rem] border p-5 ${isDarkMode ? "border-slate-700 bg-slate-900/50" : "border-slate-200 bg-slate-50"}`}>
+                <p className={`text-sm ${mutedClass}`}>Current role</p>
+                <p className={`mt-1 text-lg font-semibold ${strongClass}`}>ADMIN</p>
+                <p className={`mt-3 text-sm ${mutedClass}`}>Signed in as</p>
+                <p className={`mt-1 inline-flex items-center gap-2 text-base font-semibold ${strongClass}`}><UserCircle className="h-5 w-5 text-emerald-500" />{email}</p>
+                <p className={`mt-4 inline-flex items-center gap-2 text-xs font-semibold ${mutedClass}`}><BadgeCheck className="h-4 w-4 text-emerald-500" />{monthLabel}</p>
+              </div>
+              <div className={`rounded-[1.35rem] border p-5 ${isDarkMode ? "border-slate-700 bg-slate-900/50" : "border-slate-200 bg-slate-50"}`}>
+                <div className="flex items-center justify-between"><p className={`text-sm font-semibold ${strongClass}`}>On-time %</p><Clock3 className="h-5 w-5 text-emerald-500" /></div>
+                <div className="mt-4 flex items-center gap-4"><div className="relative grid h-24 w-24 place-items-center rounded-full" style={onTimeRingStyle}><div className={`grid h-16 w-16 place-items-center rounded-full ${isDarkMode ? "bg-slate-900" : "bg-white"}`}><span className={`text-sm font-bold ${strongClass}`}>{attendanceLoading ? "--" : `${onTimePercent}%`}</span></div></div><div><p className={`text-sm ${mutedClass}`}>Employees on time</p><p className={`text-xl font-bold ${strongClass}`}>{attendanceLoading ? "--" : onTimeCount}</p></div></div>
+              </div>
+              <div className={`rounded-[1.35rem] border p-5 ${isDarkMode ? "border-slate-700 bg-slate-900/50" : "border-slate-200 bg-slate-50"}`}>
+                <div className="flex items-center justify-between"><p className={`text-sm font-semibold ${strongClass}`}>Absent %</p><AlertTriangle className="h-5 w-5 text-red-500" /></div>
+                <div className="mt-4 flex items-center gap-4"><div className="relative grid h-24 w-24 place-items-center rounded-full" style={absentRingStyle}><div className={`grid h-16 w-16 place-items-center rounded-full ${isDarkMode ? "bg-slate-900" : "bg-white"}`}><span className={`text-sm font-bold ${strongClass}`}>{attendanceLoading ? "--" : `${absentPercent}%`}</span></div></div><div><p className={`text-sm ${mutedClass}`}>Employees absent</p><p className={`text-xl font-bold ${strongClass}`}>{attendanceLoading ? "--" : absentCount}</p></div></div>
+              </div>
+            </section>
+
+            <section className={`rounded-[1.35rem] border p-4 md:p-5 ${isDarkMode ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-100" : "border-emerald-100 bg-emerald-50 text-emerald-900"}`}>
+              <div className="flex items-start gap-3"><div className={`rounded-2xl p-2.5 ${isDarkMode ? "bg-emerald-500/20" : "bg-emerald-100"}`}><BriefcaseBusiness className="h-5 w-5 text-emerald-600" /></div><div><p className="text-sm font-semibold">Admin access is active</p><p className="mt-1 text-sm opacity-90">Manage users, attendance, accounting, and forecasting from the current navigation.</p></div></div>
             </section>
           </div>
         </main>

@@ -2,8 +2,18 @@ import fs from "fs";
 import PDFDocument from "pdfkit";
 import { Op, fn, col, where } from "sequelize";
 import AttendanceRecord from "../models/AttendanceRecord.js";
+import StaffNotification from "../models/StaffNotification.js";
 import User from "../models/User.js";
-import { buildAttendanceSummary } from "../utils/attendanceSummary.js";
+import { buildAttendanceSummary, FLEXI_TIME_GRACE_MINUTES } from "../utils/attendanceSummary.js";
+import { resolveEmployeeMatch } from "../utils/employeeIdentity.js";
+import { detectAttendanceAnomaly } from "../utils/anomalyDetection.js";
+import { buildAbsenceAlertMessage, hasExceededAbsenceLimit } from "../utils/absenceAlert.js";
+import { detectSuspiciousTimeIn } from "../utils/suspiciousTimeIn.js";
+import { buildCscForm48Groups } from "../utils/cscForm48Groups.js";
+import { detectRepeatedLatePattern } from "../utils/repeatedLatePattern.js";
+import { detectSharedPunchPatterns } from "../utils/fakeAttendanceReview.js";
+import { detectSuddenScheduleInconsistencies } from "../utils/scheduleInconsistency.js";
+import { buildPossibleTimeTheftReview } from "../utils/possibleTimeTheftReview.js";
 
 const REQUIRED_HEADERS = {
   employeeBiometricId: ["employee_id", "employeeid", "biometric_id", "biometricid", "id", "enroll_id", "enrollid"],
@@ -871,10 +881,35 @@ export const uploadAttendanceRecords = async (req, res) => {
       userWhere.campus = requesterScope.campus;
     }
 
-    const users = await User.findAll({
+    let users = await User.findAll({
       where: userWhere,
       attributes: ["id", "employeeBiometricId", "CompleteName"]
     });
+
+    const needsIdentityFallback = parsedRows.some((row) => {
+      const hasExactBiometricMatch = users.some((user) =>
+        String(user.employeeBiometricId || "").trim() === row.employeeBiometricId
+      );
+
+      return !hasExactBiometricMatch && (
+        Boolean(row.employeeNameFromFile) || /^\d+$/.test(row.employeeBiometricId)
+      );
+    });
+
+    if (needsIdentityFallback) {
+      const fallbackWhere = { role: { [Op.ne]: "admin" } };
+
+      if (requesterScope.isHr) {
+        fallbackWhere.campus = requesterScope.campus;
+      }
+
+      const nameMatchUsers = await User.findAll({
+        where: fallbackWhere,
+        attributes: ["id", "employeeBiometricId", "CompleteName"]
+      });
+      const uniqueUsers = new Map(users.concat(nameMatchUsers).map((user) => [Number(user.id), user]));
+      users = Array.from(uniqueUsers.values());
+    }
 
     const userByBiometricId = new Map(
       users.map((user) => [String(user.employeeBiometricId).trim(), user])
@@ -884,7 +919,12 @@ export const uploadAttendanceRecords = async (req, res) => {
     const unmatchedBiometricIds = new Set();
 
     parsedRows.forEach((row) => {
-      const matchedUser = userByBiometricId.get(row.employeeBiometricId);
+      const matchedUser = userByBiometricId.get(row.employeeBiometricId)
+        || resolveEmployeeMatch({
+          candidateBiometricId: row.employeeBiometricId,
+          candidateName: row.employeeNameFromFile,
+          users
+        });
 
       if (!matchedUser) {
         unmatchedBiometricIds.add(row.employeeBiometricId);
@@ -960,6 +1000,7 @@ export const uploadAttendanceRecords = async (req, res) => {
     });
 
     let insertedCount = 0;
+    let updatedCount = 0;
     let duplicateCount = 0;
 
     for (const row of rowsToUpsert) {
@@ -967,7 +1008,65 @@ export const uploadAttendanceRecords = async (req, res) => {
       const existing = existingByKey.get(key);
 
       if (existing) {
-        duplicateCount += 1;
+        const existingTimeCandidates = [
+          existing.amTimeIn,
+          existing.amTimeOut,
+          existing.noonTimeOut,
+          existing.pmTimeIn,
+          existing.noonTimeIn,
+          existing.pmTimeOut,
+          existing.timeIn,
+          existing.timeOut
+        ].filter(Boolean);
+        const incomingTimeCandidates = [
+          row.amTimeIn,
+          row.amTimeOut,
+          row.noonTimeOut,
+          row.pmTimeIn,
+          row.noonTimeIn,
+          row.pmTimeOut,
+          row.timeIn,
+          row.timeOut
+        ].filter(Boolean);
+        const mergedSlots = assignDailyTimeSlots([...existingTimeCandidates, ...incomingTimeCandidates]);
+        const existingSlots = [
+          existing.amTimeIn,
+          existing.amTimeOut,
+          existing.noonTimeOut,
+          existing.pmTimeIn,
+          existing.noonTimeIn,
+          existing.pmTimeOut,
+          existing.timeIn,
+          existing.timeOut
+        ];
+        const mergedSlotValues = [
+          mergedSlots.amTimeIn,
+          mergedSlots.amTimeOut,
+          mergedSlots.noonTimeOut,
+          mergedSlots.pmTimeIn,
+          mergedSlots.noonTimeIn,
+          mergedSlots.pmTimeOut,
+          mergedSlots.timeIn,
+          mergedSlots.timeOut
+        ];
+        const shouldUpdate = existing.matchedUserId !== (row.matchedUserId || existing.matchedUserId)
+          || mergedSlotValues.some((value, index) => value !== existingSlots[index])
+          || (!existing.remarks && row.remarks);
+
+        if (shouldUpdate) {
+          await existing.update({
+            ...mergedSlots,
+            employeeName: row.matchedUserId ? row.employeeName : existing.employeeName || row.employeeName,
+            matchedUserId: row.matchedUserId || existing.matchedUserId,
+            remarks: existing.remarks || row.remarks,
+            sourceFileName: row.sourceFileName,
+            uploadedBy: row.uploadedBy
+          });
+          updatedCount += 1;
+        } else {
+          duplicateCount += 1;
+        }
+
         continue;
       }
 
@@ -977,8 +1076,9 @@ export const uploadAttendanceRecords = async (req, res) => {
 
     res.json({
       message: "Attendance records uploaded successfully.",
-      importedCount: insertedCount,
+      importedCount: insertedCount + updatedCount,
       insertedCount,
+      updatedCount,
       duplicateCount,
       skippedCount: skippedRows,
       unmatchedBiometricIds: Array.from(unmatchedBiometricIds)
@@ -1049,7 +1149,7 @@ export const getMyAttendanceSummary = async (req, res) => {
     }
 
     const user = await User.findByPk(requesterId, {
-      attributes: ["id", "CompleteName", "employeeBiometricId", "createdAt"]
+      attributes: ["id", "CompleteName", "employeeBiometricId", "createdAt", "role", "shiftSchedule", "flexiTime"]
     });
 
     if (!user) {
@@ -1107,24 +1207,122 @@ export const getMyAttendanceSummary = async (req, res) => {
       records,
       monthStart,
       rangeEnd,
-      workDays
+      workDays,
+      flexiTime: user.flexiTime,
+      shiftSchedule: user.shiftSchedule
     });
+    const repeatedLatePattern = detectRepeatedLatePattern({ lateDays: summaryCounts.lateDays });
+
+    if (String(user.role || "").toLowerCase() === "staff" && repeatedLatePattern.detected) {
+      const deduplicationKey = `repeated-late:${requesterId}:${year}-${String(month).padStart(2, "0")}`;
+      const [notification] = await StaffNotification.findOrCreate({
+        where: { deduplicationKey },
+        defaults: {
+          userId: requesterId,
+          type: "repeated_late",
+          title: "Repeated late arrivals detected",
+          message: repeatedLatePattern.message,
+          deduplicationKey
+        }
+      });
+
+      await notification.update({ message: repeatedLatePattern.message });
+    }
+
+    if (
+      String(user.role || "").toLowerCase() === "staff" &&
+      hasExceededAbsenceLimit({
+        absentDays: summaryCounts.absentDays,
+        expectedWorkDays: workDays
+      })
+    ) {
+      const deduplicationKey = `absence-limit:${requesterId}:${year}-${String(month).padStart(2, "0")}`;
+      const notificationMessage = buildAbsenceAlertMessage({
+        completeName: user.CompleteName,
+        absentDays: summaryCounts.absentDays,
+        lateDays: summaryCounts.lateDays
+      });
+
+      const [notification] = await StaffNotification.findOrCreate({
+        where: { deduplicationKey },
+        defaults: {
+          userId: requesterId,
+          type: "absence_limit",
+          title: "Attendance absence limit reached",
+          message: notificationMessage,
+          deduplicationKey
+        }
+      });
+
+      await notification.update({ message: notificationMessage });
+    }
 
     return res.json({
       summary: {
         month,
         year,
         monthLabel: monthStart.toLocaleString("en-US", { month: "long", year: "numeric" }),
+        flexiTime: Boolean(user.flexiTime),
+        shiftSchedule: user.shiftSchedule || "",
+        lateGraceMinutes: FLEXI_TIME_GRACE_MINUTES,
         expectedWorkDays: workDays,
         presentDays: summaryCounts.presentDays,
         onTimeDays: summaryCounts.onTimeDays,
         lateDays: summaryCounts.lateDays,
+        repeatedLatePattern,
         absentDays: summaryCounts.absentDays,
+        presentPercent: toPercent(summaryCounts.presentDays, workDays),
         onTimePercent: toPercent(summaryCounts.onTimeDays, workDays),
         latePercent: toPercent(summaryCounts.lateDays, workDays),
         absentPercent: toPercent(summaryCounts.absentDays, workDays)
       }
     });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+export const getMyAttendanceNotifications = async (req, res) => {
+  try {
+    const userId = Number(req.user?.id);
+
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(401).json({ message: "Unauthorized request." });
+    }
+
+    const notifications = await StaffNotification.findAll({
+      where: { userId },
+      attributes: ["id", "type", "title", "message", "isRead", "createdAt"],
+      order: [["createdAt", "DESC"]],
+      limit: 30
+    });
+    const unreadCount = notifications.filter((notification) => !notification.isRead).length;
+
+    return res.json({ notifications, unreadCount });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+export const markAttendanceNotificationRead = async (req, res) => {
+  try {
+    const userId = Number(req.user?.id);
+    const notificationId = Number(req.params.notificationId);
+
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(401).json({ message: "Unauthorized request." });
+    }
+
+    const notification = await StaffNotification.findOne({
+      where: { id: notificationId, userId }
+    });
+
+    if (!notification) {
+      return res.status(404).json({ message: "Notification not found." });
+    }
+
+    await notification.update({ isRead: true });
+    return res.json({ message: "Notification marked as read." });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -1193,11 +1391,13 @@ export const getAttendanceEmployees = async (req, res) => {
       biometricSummaries = await AttendanceRecord.findAll({
         where: requesterScope.isHr
           ? {
+            matchedUserId: null,
             employeeBiometricId: {
               [Op.in]: scopedBiometricIds
             }
           }
           : {
+            matchedUserId: null,
             employeeBiometricId: {
               [Op.ne]: null
             }
@@ -1234,10 +1434,12 @@ export const getAttendanceEmployees = async (req, res) => {
     const employees = users.map((user) => {
       const matchedSummary = summaryByUserId.get(Number(user.id));
       const biometricSummary = summaryByBiometricId.get(String(user.employeeBiometricId || "").trim());
-      const summary = matchedSummary || biometricSummary || {
-        recordCount: 0,
-        latestAttendanceDate: null
-      };
+      const latestAttendanceDate = [matchedSummary?.latestAttendanceDate, biometricSummary?.latestAttendanceDate]
+        .filter(Boolean)
+        .map((date) => String(date).slice(0, 10))
+        .sort()
+        .at(-1) || null;
+      const recordCount = (matchedSummary?.recordCount || 0) + (biometricSummary?.recordCount || 0);
 
       return {
         id: user.id,
@@ -1245,8 +1447,8 @@ export const getAttendanceEmployees = async (req, res) => {
         email: user.email,
         role: user.role,
         employeeBiometricId: user.employeeBiometricId,
-        recordCount: summary.recordCount,
-        latestAttendanceDate: summary.latestAttendanceDate
+        recordCount,
+        latestAttendanceDate
       };
     });
 
@@ -1275,7 +1477,7 @@ export const getAttendanceByEmployee = async (req, res) => {
     }
 
     const user = await User.findByPk(userId, {
-      attributes: ["id", "CompleteName", "email", "role", "employeeBiometricId", "campus"]
+      attributes: ["id", "CompleteName", "email", "role", "employeeBiometricId", "campus", "shiftSchedule", "flexiTime"]
     });
 
     if (!user) {
@@ -1325,15 +1527,112 @@ export const getAttendanceByEmployee = async (req, res) => {
       order: [["attendanceDate", "DESC"]]
     });
 
+    const attendanceDatesForReview = Array.from(new Set(
+      records.map((record) => String(record.attendanceDate || "").slice(0, 10)).filter(Boolean)
+    ));
+    let comparisonRecords = [];
+
+    if (attendanceDatesForReview.length > 0) {
+      let comparisonScope = {};
+
+      if (requesterScope.isHr) {
+        const campusUsers = await User.findAll({
+          where: {
+            campus: user.campus,
+            role: { [Op.ne]: "admin" }
+          },
+          attributes: ["id", "employeeBiometricId"]
+        });
+        const campusUserIds = campusUsers.map((campusUser) => Number(campusUser.id));
+        const campusBiometricIds = campusUsers
+          .map((campusUser) => String(campusUser.employeeBiometricId || "").trim())
+          .filter(Boolean);
+        const campusRecordFilters = [];
+
+        if (campusUserIds.length > 0) {
+          campusRecordFilters.push({ matchedUserId: { [Op.in]: campusUserIds } });
+        }
+
+        if (campusBiometricIds.length > 0) {
+          campusRecordFilters.push({ employeeBiometricId: { [Op.in]: campusBiometricIds } });
+        }
+
+        comparisonScope = campusRecordFilters.length > 0 ? { [Op.or]: campusRecordFilters } : null;
+      }
+
+      if (comparisonScope !== null) {
+        comparisonRecords = await AttendanceRecord.findAll({
+          where: {
+            [Op.and]: [
+              { attendanceDate: { [Op.in]: attendanceDatesForReview } },
+              ...(requesterScope.isHr ? [comparisonScope] : [])
+            ]
+          },
+          attributes: [
+            "id", "matchedUserId", "employeeBiometricId", "attendanceDate", "amTimeIn", "amTimeOut",
+            "noonTimeOut", "noonTimeIn", "pmTimeIn", "pmTimeOut", "timeIn", "timeOut"
+          ]
+        });
+      }
+    }
+
+    const fakeAttendanceChecks = detectSharedPunchPatterns(records, comparisonRecords);
+    const fakeAttendanceCheckByRecordId = new Map(
+      fakeAttendanceChecks.map((check) => [Number(check.recordId), check])
+    );
+    const scheduleInconsistencies = detectSuddenScheduleInconsistencies(records);
+
+    const recordsWithTimeInChecks = records.map((record) => {
+      const plainRecord = record.toJSON();
+      const timeInCheck = detectSuspiciousTimeIn({
+        timeIn: plainRecord.amTimeIn || plainRecord.timeIn,
+        shiftSchedule: user.shiftSchedule
+      });
+      const suddenScheduleInconsistency = scheduleInconsistencies.get(Number(plainRecord.id)) || {
+        detected: false,
+        baselineTimeIn: null,
+        actualTimeIn: null,
+        deviationMinutes: null,
+        reason: null
+      };
+      const fakeAttendanceReview = fakeAttendanceCheckByRecordId.get(Number(plainRecord.id)) || {
+        flagged: false,
+        matchingEmployees: 0,
+        reason: null
+      };
+
+      return {
+        ...plainRecord,
+        suspiciousTimeIn: timeInCheck,
+        suddenScheduleInconsistency,
+        fakeAttendanceReview,
+        possibleTimeTheftReview: buildPossibleTimeTheftReview({
+          suspiciousTimeIn: timeInCheck,
+          suddenScheduleInconsistency,
+          fakeAttendanceReview,
+          flexiTime: user.flexiTime
+        })
+      };
+    });
+
+    const analysisEndUtc = new Date();
+    analysisEndUtc.setUTCHours(0, 0, 0, 0);
+    const analysisStartUtc = new Date(analysisEndUtc.getTime());
+    analysisStartUtc.setUTCDate(analysisStartUtc.getUTCDate() - 29);
+    const attendanceDates = records.map((record) => record.attendanceDate);
+
     res.json({
       employee: {
         id: user.id,
         completeName: user.CompleteName,
         email: user.email,
         role: user.role,
-        employeeBiometricId: user.employeeBiometricId
+        employeeBiometricId: user.employeeBiometricId,
+        shiftSchedule: user.shiftSchedule,
+        flexiTime: Boolean(user.flexiTime)
       },
-      records
+      records: recordsWithTimeInChecks,
+      aiInsight: detectAttendanceAnomaly({ attendanceDates, analysisStartUtc, analysisEndUtc })
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1396,10 +1695,6 @@ export const exportCscForm48 = async (req, res) => {
       return !excludedEmployeeNames.has(normalizedName);
     });
 
-    if (filteredUsers.length === 0) {
-      return res.status(404).json({ message: `No employees available for ${targetYearMonth}.` });
-    }
-
     const userIds = filteredUsers.map((user) => Number(user.id)).filter((id) => Number.isFinite(id));
     const biometricIds = filteredUsers
       .map((user) => String(user.employeeBiometricId || "").trim())
@@ -1423,10 +1718,6 @@ export const exportCscForm48 = async (req, res) => {
       });
     }
 
-    if (scopedFilters.length === 0) {
-      return res.status(404).json({ message: `No employees available for ${targetYearMonth}.` });
-    }
-
     const monthYearCondition = {
       [Op.and]: [
         where(fn("YEAR", col("attendanceDate")), requestedYear),
@@ -1434,103 +1725,48 @@ export const exportCscForm48 = async (req, res) => {
       ]
     };
 
-    const whereConditions = {
-      [Op.and]: [
-        monthYearCondition,
-        {
-          [Op.or]: scopedFilters
-        }
-      ]
-    };
+    const attendanceRecordConditions = [monthYearCondition];
 
-    const records = await AttendanceRecord.findAll({
-      where: whereConditions,
-      order: [
-        ["employeeName", "ASC"],
-        ["attendanceDate", "ASC"],
-        ["employeeBiometricId", "ASC"]
-      ]
-    });
+    if (requesterScope.isHr && scopedFilters.length > 0) {
+      attendanceRecordConditions.push({ [Op.or]: scopedFilters });
+    }
 
-    const monthlyRecords = records.filter((record) => String(record.attendanceDate || "").slice(0, 7) === targetYearMonth);
-
-    const nameByUserId = new Map(
-      filteredUsers.map((user) => [
-        Number(user.id),
-        String(user.CompleteName || "").trim()
-      ])
+    const attendanceRecords = !requesterScope.isHr || scopedFilters.length > 0
+      ? await AttendanceRecord.findAll({
+        where: { [Op.and]: attendanceRecordConditions },
+        order: [
+          ["employeeName", "ASC"],
+          ["attendanceDate", "ASC"],
+          ["employeeBiometricId", "ASC"]
+        ]
+      })
+      : [];
+    const monthlyRecords = attendanceRecords.filter((record) => String(record.attendanceDate || "").slice(0, 7) === targetYearMonth);
+    const exportEmployees = filteredUsers.map((user) => ({
+      id: user.id,
+      employeeBiometricId: user.employeeBiometricId,
+      employeeName: user.CompleteName
+    }));
+    const registeredBiometricIds = new Set(
+      exportEmployees
+        .map((employee) => String(employee.employeeBiometricId || "").trim())
+        .filter(Boolean)
     );
-
-    const nameByBiometricId = new Map(
-      filteredUsers.map((user) => [
-        String(user.employeeBiometricId || "").trim(),
-        String(user.CompleteName || "").trim()
-      ])
-    );
-
-    const recordsByUserId = new Map();
-    const recordsByBiometricId = new Map();
-
-    filteredUsers.forEach((user) => {
-      recordsByUserId.set(Number(user.id), []);
-
-      const biometricId = String(user.employeeBiometricId || "").trim();
-
-      if (biometricId) {
-        recordsByBiometricId.set(biometricId, []);
-      }
-    });
-
-    monthlyRecords.forEach((record) => {
-      const matchedUserId = Number(record.matchedUserId);
+    const idOnlyRecords = monthlyRecords.filter((record) => {
       const biometricId = String(record.employeeBiometricId || "").trim();
-
-      if (Number.isFinite(matchedUserId) && recordsByUserId.has(matchedUserId)) {
-        recordsByUserId.get(matchedUserId).push(record);
-      }
-
-      if (biometricId && recordsByBiometricId.has(biometricId)) {
-        recordsByBiometricId.get(biometricId).push(record);
-      }
+      return biometricId && !registeredBiometricIds.has(biometricId) && !Number(record.matchedUserId);
+    });
+    const groups = buildCscForm48Groups({
+      employees: exportEmployees,
+      records: [...monthlyRecords, ...idOnlyRecords],
+      yearMonth: targetYearMonth
     });
 
-    const groupedRecords = new Map();
-
-    filteredUsers.forEach((user) => {
-      const biometricId = String(user.employeeBiometricId || "").trim();
-      const yearMonth = targetYearMonth;
-      const groupKey = `${user.id}::${yearMonth}`;
-      const resolvedName =
-        nameByUserId.get(Number(user.id)) ||
-        nameByBiometricId.get(biometricId) ||
-        String(user.CompleteName || "").trim() ||
-        `ID ${user.id}`;
-
-      const matchedRecords = [
-        ...(recordsByUserId.get(Number(user.id)) || []),
-        ...(biometricId ? recordsByBiometricId.get(biometricId) || [] : [])
-      ];
-
-      const uniqueRecords = Array.from(
-        new Map(
-          matchedRecords.map((record) => [
-            record.id || `${record.employeeBiometricId}::${record.attendanceDate}::${record.timeIn || ""}::${record.timeOut || ""}`,
-            record
-          ])
-        ).values()
-      );
-
-      if (uniqueRecords.length === 0) {
-        return;
-      }
-
-      groupedRecords.set(groupKey, {
-        employeeBiometricId: biometricId || user.employeeBiometricId,
-        employeeName: resolvedName,
-        yearMonth,
-        records: uniqueRecords
+    if (groups.length === 0) {
+      return res.status(404).json({
+        message: `No attendance records found for ${targetYearMonth}. Choose the month containing the uploaded records.`
       });
-    });
+    }
 
     const fileName = `csc-form-48-${targetYearMonth}.pdf`;
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
@@ -1541,8 +1777,6 @@ export const exportCscForm48 = async (req, res) => {
 
     const doc = new PDFDocument({ size: "A4", margin: 32 });
     doc.pipe(res);
-
-    const groups = Array.from(groupedRecords.values());
 
     for (let index = 0; index < groups.length; index += 2) {
       if (index > 0) {

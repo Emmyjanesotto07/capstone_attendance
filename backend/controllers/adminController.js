@@ -4,6 +4,7 @@ import crypto from "crypto";
 import User from "../models/User.js";
 import Message from "../models/Message.js";
 import AttendanceRecord from "../models/AttendanceRecord.js";
+import { getShiftStartMinutes } from "../utils/attendanceSummary.js";
 
 const ASSIGNABLE_ROLES = ["admin", "staff", "hr", "accounting"];
 const WEEKDAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -91,7 +92,7 @@ const buildHeaderIndexMap = (headers) => {
     email: findIndex(["email", "emailaddress"]),
     password: findIndex(["password", "pass"]),
     role: findIndex(["role", "usertype"]),
-    campus: findIndex(["campus"]),
+    campus: findIndex(["campus", "office"]),
     college: findIndex(["college", "department"]),
     fullName: findIndex(["completename", "fullname", "name"]),
     firstName: findIndex(["firstname", "fname", "givenname"]),
@@ -351,6 +352,7 @@ export const getAllUsers = async (req, res) => {
         "id",
         "CompleteName",
         "employeeBiometricId",
+        "flexiTime",
         "email",
         "campus",
         "college",
@@ -562,6 +564,46 @@ export const updateUserBiometricId = async (req, res) => {
   }
 };
 
+export const updateUserFlexiTime = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const flexiTime = req.body?.flexiTime;
+
+    if (typeof flexiTime !== "boolean") {
+      return res.status(400).json({ message: "Flexi-time must be enabled or disabled." });
+    }
+
+    const user = await User.findByPk(id);
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    if (!canManageUser(req.user, user)) {
+      return res.status(403).json({ message: "You can only manage employees within your campus." });
+    }
+
+    if (flexiTime && getShiftStartMinutes(user.shiftSchedule) === null) {
+      return res.status(400).json({
+        message: "Set a valid shift start time on the employee profile before enabling flexi-time."
+      });
+    }
+
+    user.flexiTime = flexiTime;
+    await user.save();
+
+    return res.json({
+      message: `Flexi-time ${flexiTime ? "enabled" : "disabled"} for ${user.CompleteName}.`,
+      user: {
+        id: user.id,
+        flexiTime: user.flexiTime
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
 export const importUsersFromCsv = async (req, res) => {
   try {
     if (!req.file) {
@@ -596,7 +638,9 @@ export const importUsersFromCsv = async (req, res) => {
     const processedBiometricIds = new Set();
     const createdUsers = [];
     const skippedBiometricIds = [];
+    const duplicateBiometricIds = [];
     const invalidCampusBiometricIds = [];
+    const campusMismatchBiometricIds = [];
     const temporaryCredentials = [];
 
     for (let lineIndex = 1; lineIndex < lines.length; lineIndex += 1) {
@@ -609,6 +653,7 @@ export const importUsersFromCsv = async (req, res) => {
 
       if (processedBiometricIds.has(biometricId)) {
         skippedBiometricIds.push(biometricId);
+        duplicateBiometricIds.push(biometricId);
         continue;
       }
 
@@ -621,6 +666,7 @@ export const importUsersFromCsv = async (req, res) => {
 
       if (existingByBiometric) {
         skippedBiometricIds.push(biometricId);
+        duplicateBiometricIds.push(biometricId);
         continue;
       }
 
@@ -639,6 +685,7 @@ export const importUsersFromCsv = async (req, res) => {
 
       if (requesterRole === "hr" && requesterCampus && campusFromCsv !== requesterCampus) {
         skippedBiometricIds.push(biometricId);
+        campusMismatchBiometricIds.push(biometricId);
         continue;
       }
 
@@ -683,7 +730,9 @@ export const importUsersFromCsv = async (req, res) => {
       createdCount: createdUsers.length,
       skippedCount: skippedBiometricIds.length,
       skippedBiometricIds,
+      duplicateBiometricIds,
       invalidCampusBiometricIds,
+      campusMismatchBiometricIds,
       temporaryCredentials
     });
   } catch (err) {

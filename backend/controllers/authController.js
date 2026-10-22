@@ -68,9 +68,23 @@ export const register = async (req, res) => {
     const normalizedDepartments = resolveDepartment(req.body || {});
     const normalizedOffices = resolveOffice(req.body || {});
     const normalizedRole = role ? role.toLowerCase().trim() : "staff";
+    const contactNumber = String(req.body.contactNumber || "").trim();
+    const emergencyContact = String(req.body.emergencyContact || "").trim();
+    const department = String(req.body.department || "").trim();
+    const position = String(req.body.position || "").trim();
+    const employeeCategory = String(req.body.employeeCategory || "").trim().toLowerCase();
+    const shiftSchedule = String(req.body.shiftSchedule || "").trim();
 
     if (!normalizedEmail || !password || !normalizedName || !normalizedOffices) {
       return res.status(400).json({ message: "CompleteName, email, office, and password are required." });
+    }
+
+    if (!contactNumber || !emergencyContact || !department || !position || !shiftSchedule) {
+      return res.status(400).json({ message: "Contact and employment details are required." });
+    }
+
+    if (!["regular", "cos", "job_order"].includes(employeeCategory)) {
+      return res.status(400).json({ message: "Select a valid employee category." });
     }
 
     if (!VALID_OFFICES.includes(normalizedOffices)) {
@@ -95,7 +109,13 @@ export const register = async (req, res) => {
       campus: normalizedOffices,
       college: normalizedOffices,
       role: normalizedRole,
-      password: hash
+      password: hash,
+      contactNumber,
+      emergencyContact,
+      department,
+      position,
+      employeeCategory,
+      shiftSchedule
     });
 
     res.json({

@@ -49,3 +49,17 @@ test("does not flag stable attendance as an anomaly", () => {
   assert.equal(anomaly.isAnomalous, false);
   assert.equal(anomaly.severity, "low");
 });
+
+test("reports insufficient data instead of high risk when there are no attendance rows", () => {
+  const anomaly = detectAttendanceAnomaly({
+    attendanceDates: [],
+    analysisStartUtc: new Date(Date.UTC(2026, 0, 1)),
+    analysisEndUtc: new Date(Date.UTC(2026, 0, 31))
+  });
+
+  assert.equal(anomaly.isAnomalous, false);
+  assert.equal(anomaly.severity, "insufficient");
+  assert.equal(anomaly.dataAvailable, false);
+  assert.equal(anomaly.score, 0);
+  assert.match(anomaly.reason, /No attendance records/);
+});

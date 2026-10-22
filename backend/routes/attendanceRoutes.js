@@ -7,12 +7,16 @@ import {
 	exportCscForm48,
 	getAttendanceEmployees,
 	getAttendanceByEmployee,
-	getMyAttendanceSummary
+	getMyAttendanceSummary,
+	getMyAttendanceNotifications,
+	markAttendanceNotificationRead
 } from "../controllers/attendanceController.js";
 
 const router = express.Router();
 
 router.get("/my-summary", auth, getMyAttendanceSummary);
+router.get("/my-notifications", auth, getMyAttendanceNotifications);
+router.post("/my-notifications/:notificationId/read", auth, markAttendanceNotificationRead);
 
 router.use(auth, adminOrHrOnly);
 

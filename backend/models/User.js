@@ -18,6 +18,35 @@ const User = sequelize.define(
       allowNull: true,
       unique: true
     },
+    contactNumber: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    emergencyContact: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    department: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    position: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    employeeCategory: {
+      type: DataTypes.ENUM("regular", "cos", "job_order"),
+      allowNull: true
+    },
+    shiftSchedule: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    flexiTime: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
+    },
     campus: {
       type: DataTypes.STRING,
       allowNull: false

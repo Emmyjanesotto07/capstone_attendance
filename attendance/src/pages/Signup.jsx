@@ -39,6 +39,12 @@ export default function Signup() {
   const [completeName, setCompleteName] = useState("");
   const [email, setEmail] = useState("");
   const [office, setOffice] = useState("");
+  const [contactNumber, setContactNumber] = useState("");
+  const [emergencyContact, setEmergencyContact] = useState("");
+  const [department, setDepartment] = useState("");
+  const [position, setPosition] = useState("");
+  const [employeeCategory, setEmployeeCategory] = useState("regular");
+  const [shiftSchedule, setShiftSchedule] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -86,6 +92,12 @@ export default function Signup() {
       errors.office = "Please select a valid office.";
     }
 
+    if (!contactNumber.trim()) errors.contactNumber = "Contact number is required.";
+    if (!emergencyContact.trim()) errors.emergencyContact = "Emergency contact is required.";
+    if (!department.trim()) errors.department = "Department is required.";
+    if (!position.trim()) errors.position = "Position or job title is required.";
+    if (!shiftSchedule.trim()) errors.shiftSchedule = "Shift schedule is required.";
+
     const strongPasswordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,}$/;
 
     if (!password) {
@@ -129,6 +141,12 @@ export default function Signup() {
           email: email.trim(),
           offices: office.toLowerCase(),
           departments: office.toLowerCase(),
+          contactNumber: contactNumber.trim(),
+          emergencyContact: emergencyContact.trim(),
+          department: department.trim(),
+          position: position.trim(),
+          employeeCategory,
+          shiftSchedule: shiftSchedule.trim(),
           password
         })
       });
@@ -140,6 +158,12 @@ export default function Signup() {
         setCompleteName("");
         setEmail("");
         setOffice("");
+        setContactNumber("");
+        setEmergencyContact("");
+        setDepartment("");
+        setPosition("");
+        setEmployeeCategory("regular");
+        setShiftSchedule("");
         setPassword("");
         setConfirmPassword("");
 
@@ -272,7 +296,7 @@ export default function Signup() {
 
               <form onSubmit={handleSubmit} className="space-y-5">
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? "text-slate-200" : "text-slate-700"}`}>Complete Name</label>
+                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? "text-slate-200" : "text-slate-700"}`}>Full Name</label>
                   <div className="relative">
                     <User className={`absolute left-3 top-3.5 w-5 h-5 pointer-events-none ${isDarkMode ? "text-slate-400" : "text-slate-500"}`} />
                     <input
@@ -329,6 +353,100 @@ export default function Signup() {
                     <ChevronDown className={`absolute right-3 top-3.5 w-5 h-5 pointer-events-none ${isDarkMode ? "text-slate-400" : "text-slate-500"}`} />
                   </div>
                   {fieldErrors.office && <p className={`text-xs mt-1 ${isDarkMode ? "text-red-300" : "text-red-600"}`}>{fieldErrors.office}</p>}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? "text-slate-200" : "text-slate-700"}`}>Contact Number</label>
+                    <input
+                      type="tel"
+                      autoComplete="tel"
+                      placeholder="09XX XXX XXXX"
+                      value={contactNumber}
+                      onChange={(event) => setContactNumber(event.target.value)}
+                      className={`w-full px-4 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 ${
+                        isDarkMode ? "bg-slate-700/50 border-slate-600 text-white placeholder-slate-500" : "bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400"
+                      }`}
+                      required
+                    />
+                    {fieldErrors.contactNumber && <p className={`text-xs mt-1 ${isDarkMode ? "text-red-300" : "text-red-600"}`}>{fieldErrors.contactNumber}</p>}
+                  </div>
+
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? "text-slate-200" : "text-slate-700"}`}>Emergency Contact</label>
+                    <input
+                      type="text"
+                      placeholder="Name and phone number"
+                      value={emergencyContact}
+                      onChange={(event) => setEmergencyContact(event.target.value)}
+                      className={`w-full px-4 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 ${
+                        isDarkMode ? "bg-slate-700/50 border-slate-600 text-white placeholder-slate-500" : "bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400"
+                      }`}
+                      required
+                    />
+                    {fieldErrors.emergencyContact && <p className={`text-xs mt-1 ${isDarkMode ? "text-red-300" : "text-red-600"}`}>{fieldErrors.emergencyContact}</p>}
+                  </div>
+
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? "text-slate-200" : "text-slate-700"}`}>Department</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Human Resources"
+                      value={department}
+                      onChange={(event) => setDepartment(event.target.value)}
+                      className={`w-full px-4 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 ${
+                        isDarkMode ? "bg-slate-700/50 border-slate-600 text-white placeholder-slate-500" : "bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400"
+                      }`}
+                      required
+                    />
+                    {fieldErrors.department && <p className={`text-xs mt-1 ${isDarkMode ? "text-red-300" : "text-red-600"}`}>{fieldErrors.department}</p>}
+                  </div>
+
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? "text-slate-200" : "text-slate-700"}`}>Position / Job Title</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Administrative Officer"
+                      value={position}
+                      onChange={(event) => setPosition(event.target.value)}
+                      className={`w-full px-4 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 ${
+                        isDarkMode ? "bg-slate-700/50 border-slate-600 text-white placeholder-slate-500" : "bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400"
+                      }`}
+                      required
+                    />
+                    {fieldErrors.position && <p className={`text-xs mt-1 ${isDarkMode ? "text-red-300" : "text-red-600"}`}>{fieldErrors.position}</p>}
+                  </div>
+
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? "text-slate-200" : "text-slate-700"}`}>Employee Category</label>
+                    <select
+                      value={employeeCategory}
+                      onChange={(event) => setEmployeeCategory(event.target.value)}
+                      className={`w-full px-4 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 ${
+                        isDarkMode ? "bg-slate-700/50 border-slate-600 text-white" : "bg-slate-50 border-slate-300 text-slate-900"
+                      }`}
+                      required
+                    >
+                      <option value="regular">Regular</option>
+                      <option value="cos">COS</option>
+                      <option value="job_order">Job Order</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? "text-slate-200" : "text-slate-700"}`}>Shift Schedule</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 8:00 AM - 5:00 PM"
+                      value={shiftSchedule}
+                      onChange={(event) => setShiftSchedule(event.target.value)}
+                      className={`w-full px-4 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 ${
+                        isDarkMode ? "bg-slate-700/50 border-slate-600 text-white placeholder-slate-500" : "bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400"
+                      }`}
+                      required
+                    />
+                    {fieldErrors.shiftSchedule && <p className={`text-xs mt-1 ${isDarkMode ? "text-red-300" : "text-red-600"}`}>{fieldErrors.shiftSchedule}</p>}
+                  </div>
                 </div>
 
                 <div>
