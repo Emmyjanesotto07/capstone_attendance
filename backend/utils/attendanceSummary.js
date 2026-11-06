@@ -32,7 +32,7 @@ const toTimeMinutes = (value) => {
   return hours * 60 + minutes;
 };
 
-const LATE_THRESHOLD_MINUTES = 8 * 60 + 15;
+const LATE_THRESHOLD_MINUTES = 7 * 60 + 30;
 export const FLEXI_TIME_GRACE_MINUTES = 1;
 
 export const getShiftStartMinutes = (shiftSchedule) => {

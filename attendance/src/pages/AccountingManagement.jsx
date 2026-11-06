@@ -560,6 +560,7 @@ export default function AccountingManagement() {
 
   const handleComputeSalary = async () => {
     setError("");
+    setSalaryPreview(null);
     const payload = buildSalaryPayload();
 
     if (!payload.employeeName) {
@@ -1344,10 +1345,24 @@ export default function AccountingManagement() {
                   </div>
 
                   <div className={`max-h-[360px] overflow-y-auto ${isDarkMode ? "bg-slate-900/20" : "bg-white"}`}>
-                    {salaryRecords.length === 0 ? (
+                    {salaryPreview && !editingSalary && (
+                      <div className={`grid grid-cols-[1.2fr_.8fr_.8fr_.8fr_.8fr_.8fr] gap-3 px-4 py-3 text-sm border-t ${isDarkMode ? "border-indigo-700 text-slate-200 bg-indigo-950/30" : "border-indigo-200 text-slate-700 bg-indigo-50"}`}>
+                        <div>
+                          <p className="font-medium">{salaryEmployeeName || "New employee"}</p>
+                          <p className={`text-xs ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
+                            {salaryPayPeriodStart} to {salaryPayPeriodEnd}
+                          </p>
+                        </div>
+                        <span className="capitalize">{salaryCategory.replace("_", " ")}</span>
+                        <span>{formatOfficeLabel(salaryOffice)}</span>
+                        <span className="font-medium">Preview (not saved)</span>
+                        <span className="text-right font-semibold">{formatMoney(salaryPreview.netSalary)}</span>
+                        <span className="text-right text-xs">—</span>
+                      </div>
+                    )}
+                    {salaryRecords.length === 0 && !salaryPreview ? (
                       <div className={`px-4 py-6 text-sm ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>No salary records found.</div>
-                    ) : (
-                      salaryRecords.map((record) => (
+                    ) : salaryRecords.map((record) => (
                         <div key={record.id} className={`grid grid-cols-[1.2fr_.8fr_.8fr_.8fr_.8fr_.8fr] gap-3 px-4 py-3 text-sm border-t first:border-t-0 ${isDarkMode ? "border-slate-700 text-slate-200" : "border-slate-200 text-slate-700"}`}>
                           <div>
                             <p className="font-medium">{record.employeeName}</p>
@@ -1364,8 +1379,7 @@ export default function AccountingManagement() {
                             </button>
                           </div>
                         </div>
-                      ))
-                    )}
+                      ))}
                   </div>
                 </div>
               </div>

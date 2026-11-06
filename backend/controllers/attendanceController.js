@@ -1088,7 +1088,7 @@ export const uploadAttendanceRecords = async (req, res) => {
   }
 };
 
-const LATE_THRESHOLD_MINUTES = 8 * 60 + 15;
+const LATE_THRESHOLD_MINUTES = 7 * 60 + 30;
 
 const countBusinessDaysInRange = (startDate, endDate) => {
   if (!(startDate instanceof Date) || Number.isNaN(startDate.getTime())) {
@@ -1127,6 +1127,13 @@ const toPercent = (value, total) => {
   return Number(((value / total) * 100).toFixed(1));
 };
 
+const toLocalDateString = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
 const isLateRecord = (record) => {
   const remarks = String(record?.remarks || "").trim().toLowerCase();
 
@@ -1149,7 +1156,7 @@ export const getMyAttendanceSummary = async (req, res) => {
     }
 
     const user = await User.findByPk(requesterId, {
-      attributes: ["id", "CompleteName", "employeeBiometricId", "createdAt", "role", "shiftSchedule", "flexiTime"]
+      attributes: ["id", "CompleteName", "employeeBiometricId", "role", "shiftSchedule", "flexiTime"]
     });
 
     if (!user) {
@@ -1188,8 +1195,8 @@ export const getMyAttendanceSummary = async (req, res) => {
           {
             attendanceDate: {
               [Op.between]: [
-                monthStart.toISOString().slice(0, 10),
-                rangeEnd.toISOString().slice(0, 10)
+                toLocalDateString(monthStart),
+                toLocalDateString(rangeEnd)
               ]
             }
           },
@@ -1203,7 +1210,7 @@ export const getMyAttendanceSummary = async (req, res) => {
 
     const workDays = countBusinessDaysInRange(monthStart, rangeEnd);
     const summaryCounts = buildAttendanceSummary({
-      userCreatedAt: user.createdAt,
+      userCreatedAt: records.length === 0 ? rangeEnd : null,
       records,
       monthStart,
       rangeEnd,
@@ -1212,6 +1219,54 @@ export const getMyAttendanceSummary = async (req, res) => {
       shiftSchedule: user.shiftSchedule
     });
     const repeatedLatePattern = detectRepeatedLatePattern({ lateDays: summaryCounts.lateDays });
+
+    if (
+      String(user.role || "").toLowerCase() === "staff" &&
+      month === now.getMonth() + 1 &&
+      year === now.getFullYear()
+    ) {
+      const analysisEndUtc = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+      const analysisStartUtc = new Date(analysisEndUtc.getTime());
+      analysisStartUtc.setUTCDate(analysisStartUtc.getUTCDate() - 29);
+      const analysisRecords = await AttendanceRecord.findAll({
+        where: {
+          [Op.and]: [
+            {
+              attendanceDate: {
+                [Op.between]: [
+                  analysisStartUtc.toISOString().slice(0, 10),
+                  analysisEndUtc.toISOString().slice(0, 10)
+                ]
+              }
+            },
+            { [Op.or]: whereConditions }
+          ]
+        },
+        attributes: ["attendanceDate"]
+      });
+      const anomaly = detectAttendanceAnomaly({
+        attendanceDates: analysisRecords.map((record) => record.attendanceDate),
+        analysisStartUtc,
+        analysisEndUtc
+      });
+
+      if (anomaly.isAnomalous) {
+        const deduplicationKey = `attendance-anomaly:${requesterId}:${year}-${String(month).padStart(2, "0")}`;
+        const notificationMessage = `${anomaly.reason} This is an automated alert for your awareness, not a finding of misconduct. Please review your attendance records or contact HR if you believe this is incorrect.`;
+        const [notification] = await StaffNotification.findOrCreate({
+          where: { deduplicationKey },
+          defaults: {
+            userId: requesterId,
+            type: "attendance_anomaly",
+            title: "Attendance pattern needs review",
+            message: notificationMessage,
+            deduplicationKey
+          }
+        });
+
+        await notification.update({ message: notificationMessage });
+      }
+    }
 
     if (String(user.role || "").toLowerCase() === "staff" && repeatedLatePattern.detected) {
       const deduplicationKey = `repeated-late:${requesterId}:${year}-${String(month).padStart(2, "0")}`;

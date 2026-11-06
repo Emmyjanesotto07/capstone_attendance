@@ -636,18 +636,20 @@ export const importUsersFromCsv = async (req, res) => {
 
     const usedEmails = new Set();
     const processedBiometricIds = new Set();
-    const createdUsers = [];
+    const importedUsers = [];
+    let alreadyExistsCount = 0;
+    let missingBiometricIdRows = 0;
     const skippedBiometricIds = [];
     const duplicateBiometricIds = [];
     const invalidCampusBiometricIds = [];
     const campusMismatchBiometricIds = [];
-    const temporaryCredentials = [];
 
     for (let lineIndex = 1; lineIndex < lines.length; lineIndex += 1) {
       const row = parseDelimitedLine(lines[lineIndex], delimiter);
       const biometricId = String(row[indexMap.biometricId] || "").trim();
 
       if (!biometricId) {
+        missingBiometricIdRows += 1;
         continue;
       }
 
@@ -658,17 +660,6 @@ export const importUsersFromCsv = async (req, res) => {
       }
 
       processedBiometricIds.add(biometricId);
-
-      const existingByBiometric = await User.findOne({
-        where: { employeeBiometricId: biometricId },
-        attributes: ["id"]
-      });
-
-      if (existingByBiometric) {
-        skippedBiometricIds.push(biometricId);
-        duplicateBiometricIds.push(biometricId);
-        continue;
-      }
 
       const completeName = buildCompleteName(row, indexMap) || `Employee ${biometricId}`;
       const campusFromCsv = normalizeCampus(row[indexMap.campus]);
@@ -693,6 +684,30 @@ export const importUsersFromCsv = async (req, res) => {
         ? (requesterCampus || campusFromCsv)
         : campusFromCsv;
 
+      const existingByBiometric = await User.findOne({
+        where: { employeeBiometricId: biometricId },
+        attributes: ["employeeBiometricId", "CompleteName", "email", "campus", "college", "role"]
+      });
+
+      if (existingByBiometric) {
+        if (requesterRole === "hr" && requesterCampus && existingByBiometric.campus !== requesterCampus) {
+          skippedBiometricIds.push(biometricId);
+          campusMismatchBiometricIds.push(biometricId);
+          continue;
+        }
+
+        alreadyExistsCount += 1;
+        importedUsers.push({
+          employeeBiometricId: existingByBiometric.employeeBiometricId,
+          completeName: existingByBiometric.CompleteName,
+          email: existingByBiometric.email,
+          campus: existingByBiometric.campus,
+          college: existingByBiometric.college,
+          role: existingByBiometric.role
+        });
+        continue;
+      }
+
       const college = collegeFromCsv || "ccs";
       const role = requesterRole === "hr" ? "staff" : roleFromCsv;
 
@@ -702,7 +717,7 @@ export const importUsersFromCsv = async (req, res) => {
       const plainPassword = rawPassword || generateTemporaryPassword();
       const passwordHash = await bcrypt.hash(plainPassword, 10);
 
-      const created = await User.create({
+      await User.create({
         CompleteName: completeName,
         employeeBiometricId: biometricId,
         email,
@@ -713,27 +728,27 @@ export const importUsersFromCsv = async (req, res) => {
         verified: true
       });
 
-      createdUsers.push(created.id);
-
-      if (!rawPassword || !rawEmail) {
-        temporaryCredentials.push({
-          employeeBiometricId: biometricId,
-          completeName,
-          email,
-          password: plainPassword
-        });
-      }
+      importedUsers.push({
+        employeeBiometricId: biometricId,
+        completeName,
+        email,
+        campus,
+        college,
+        role
+      });
     }
 
     return res.status(201).json({
       message: "Employee CSV import completed.",
-      createdCount: createdUsers.length,
-      skippedCount: skippedBiometricIds.length,
+      createdCount: importedUsers.length - alreadyExistsCount,
+      alreadyExistsCount,
+      skippedCount: skippedBiometricIds.length + missingBiometricIdRows,
+      missingBiometricIdRows,
       skippedBiometricIds,
       duplicateBiometricIds,
       invalidCampusBiometricIds,
       campusMismatchBiometricIds,
-      temporaryCredentials
+      importedUsers
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });

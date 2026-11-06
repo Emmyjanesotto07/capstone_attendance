@@ -281,7 +281,7 @@ const computeSalaryBreakdown = (payload, fallback = {}) => {
   }
 
   const overtimePay = Number((overtimeHours * overtimeRate).toFixed(2));
-  const grossSalary = Number((basicSalary + allowance + overtimePay).toFixed(2));
+  const grossSalary = Number((basicSalary + allowance).toFixed(2));
 
   if (autoGovernmentDeductions) {
     if (employeeCategory === "regular") {
@@ -298,7 +298,7 @@ const computeSalaryBreakdown = (payload, fallback = {}) => {
   }
 
   const totalDeduction = Number((taxDeduction + sssDeduction + gsisDeduction + philhealthDeduction + pagibigDeduction + otherDeduction).toFixed(2));
-  const netSalary = Number((grossSalary - totalDeduction).toFixed(2));
+  const netSalary = Number((grossSalary + overtimePay - totalDeduction).toFixed(2));
 
   return {
     computation: {

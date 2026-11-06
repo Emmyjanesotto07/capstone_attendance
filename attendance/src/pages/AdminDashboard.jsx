@@ -22,6 +22,7 @@ export default function AdminDashboard() {
   const [pageLoading, setPageLoading] = useState(true);
   const [attendanceLoading, setAttendanceLoading] = useState(true);
   const [totalEmployees, setTotalEmployees] = useState(0);
+  const [employeesWithAttendanceCount, setEmployeesWithAttendanceCount] = useState(0);
   const [presentCount, setPresentCount] = useState(0);
   const [onTimeCount, setOnTimeCount] = useState(0);
   const [lateCount, setLateCount] = useState(0);
@@ -143,8 +144,9 @@ export default function AdminDashboard() {
           .filter(Boolean)
           .sort()
           .at(-1);
+        const employeesWithAttendance = employees.filter((employee) => employee.latestAttendanceDate);
         const present = latestAttendanceDate
-          ? employees.filter((employee) => String(employee.latestAttendanceDate || "").slice(0, 10) === latestAttendanceDate)
+          ? employeesWithAttendance.filter((employee) => String(employee.latestAttendanceDate || "").slice(0, 10) === latestAttendanceDate)
           : [];
         const total = employees.length;
         const presentCount = present.length;
@@ -153,10 +155,11 @@ export default function AdminDashboard() {
         const lateRatio = presentCount > 0 ? lateCount / presentCount : 0;
 
         setTotalEmployees(total);
+        setEmployeesWithAttendanceCount(employeesWithAttendance.length);
         setPresentCount(presentCount);
         setOnTimeCount(Math.max(0, presentCount - lateCount));
         setLateCount(lateCount);
-        setAbsentCount(Math.max(0, total - presentCount));
+        setAbsentCount(Math.max(0, employeesWithAttendance.length - presentCount));
 
         // Calculate monthly stats for last 6 months
         const monthlyMap = {};
@@ -255,8 +258,8 @@ export default function AdminDashboard() {
   const logoutClass = isDarkMode
     ? "bg-slate-950/80 text-white hover:bg-slate-900 border-slate-800"
     : "bg-slate-900 text-white hover:bg-slate-800 border-slate-900";
-  const onTimePercent = totalEmployees > 0 ? Math.round((onTimeCount / totalEmployees) * 100) : 0;
-  const absentPercent = totalEmployees > 0 ? Math.round((absentCount / totalEmployees) * 100) : 0;
+  const onTimePercent = employeesWithAttendanceCount > 0 ? Math.round((onTimeCount / employeesWithAttendanceCount) * 100) : 0;
+  const absentPercent = employeesWithAttendanceCount > 0 ? Math.round((absentCount / employeesWithAttendanceCount) * 100) : 0;
   const monthLabel = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(new Date());
   const onTimeRingStyle = {
     background: `conic-gradient(#10b981 ${onTimePercent}%, ${isDarkMode ? "#334155" : "#e2e8f0"} 0)`

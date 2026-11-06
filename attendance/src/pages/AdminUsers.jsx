@@ -70,6 +70,17 @@ const formatOfficeLabel = (value) => {
   return String(value || "").toUpperCase();
 };
 
+const escapeCsvValue = (value) => {
+  let text = String(value ?? "");
+  const firstNonWhitespace = text.trimStart().charAt(0);
+
+  if (["=", "+", "-", "@"].includes(firstNonWhitespace)) {
+    text = `'${text}`;
+  }
+
+  return `"${text.replace(/"/g, '""')}"`;
+};
+
 export default function AdminUsers() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -345,8 +356,13 @@ export default function AdminUsers() {
       setImportProgress(100);
       setImportSummary({
         createdCount: Number(data.createdCount) || 0,
+        alreadyExistsCount: Number(data.alreadyExistsCount) || 0,
         skippedCount: Number(data.skippedCount) || 0,
-        temporaryCredentials: Array.isArray(data.temporaryCredentials) ? data.temporaryCredentials : []
+        missingBiometricIdRows: Number(data.missingBiometricIdRows) || 0,
+        duplicateBiometricIds: Array.isArray(data.duplicateBiometricIds) ? data.duplicateBiometricIds : [],
+        invalidCampusBiometricIds: Array.isArray(data.invalidCampusBiometricIds) ? data.invalidCampusBiometricIds : [],
+        campusMismatchBiometricIds: Array.isArray(data.campusMismatchBiometricIds) ? data.campusMismatchBiometricIds : [],
+        importedUsers: Array.isArray(data.importedUsers) ? data.importedUsers : []
       });
       setImportFile(null);
       await fetchUsers();
@@ -359,20 +375,41 @@ export default function AdminUsers() {
   };
 
   const handleDownloadCsvFormat = () => {
-    const sampleCsv = [
-      "empno,lname,fname,mname,campus,college,role,email,password",
-      "417,CABRERA,CHRISTIAN,I,BONGABONG,CCS,STAFF,christian.cabrera@minsu.edu.ph,MinSU123@!"
-    ].join("\n");
+    downloadUsersCsv(users, "employee-import-format.csv");
+  };
 
-    const blob = new Blob([sampleCsv], { type: "text/csv;charset=utf-8;" });
+  const downloadUsersCsv = (usersToDownload, fileName) => {
+    if (usersToDownload.length === 0) {
+      setError("There are no user accounts to download.");
+      return;
+    }
+
+    const rows = [
+      ["empno", "completename", "campus", "college", "role", "email", "password"],
+      ...usersToDownload.map((user) => [
+        user.employeeBiometricId,
+        user.completeName || user.CompleteName,
+        user.campus,
+        user.college,
+        user.role,
+        user.email,
+        ""
+      ])
+    ];
+    const csv = rows.map((row) => row.map(escapeCsvValue).join(",")).join("\r\n");
+    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8;" });
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "employee-import-format.csv";
+    link.download = fileName;
     document.body.appendChild(link);
     link.click();
     link.remove();
     window.URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadImportedUsers = () => {
+    downloadUsersCsv(importSummary?.importedUsers || [], "imported-employee-accounts.csv");
   };
 
   if (pageLoading) {
@@ -652,12 +689,13 @@ export default function AdminUsers() {
             }`}>
               <h2 className={`text-base font-semibold ${isDarkMode ? "text-white" : "text-slate-900"}`}>Import Employees via CSV</h2>
               <p className={`text-xs ${isDarkMode ? "text-slate-300" : "text-slate-600"}`}>
-                Required columns: employee ID (e.g., empno) and office. If email/password is missing, they are auto-generated.
+                Download CSV Format saves the current user accounts in import-compatible columns. Passwords are not included; missing passwords are generated during import.
               </p>
 
               <button
                 type="button"
                 onClick={handleDownloadCsvFormat}
+                disabled={loadingUsers || users.length === 0}
                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600"
               >
                 <Download className="w-4 h-4" />
@@ -696,11 +734,35 @@ export default function AdminUsers() {
 
               {importSummary && (
                 <div className={`rounded-lg border p-3 text-xs ${isDarkMode ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-200" : "bg-emerald-50 border-emerald-200 text-emerald-700"}`}>
-                  <p>Created: {importSummary.createdCount} · Skipped: {importSummary.skippedCount}</p>
-                  {importSummary.temporaryCredentials.length > 0 && (
-                    <p className="mt-1">
-                      Auto credentials generated: {importSummary.temporaryCredentials.length}. Please save and share securely.
-                    </p>
+                  <p>
+                    Created: {importSummary.createdCount} · Already existed: {importSummary.alreadyExistsCount} · Skipped: {importSummary.skippedCount}
+                  </p>
+                  {importSummary.skippedCount > 0 && (
+                    <ul className="mt-1 list-inside list-disc">
+                      {importSummary.missingBiometricIdRows > 0 && <li>{importSummary.missingBiometricIdRows} row(s) missing an employee ID.</li>}
+                      {importSummary.duplicateBiometricIds.length > 0 && (
+                        <li>Repeated employee IDs in the CSV: {importSummary.duplicateBiometricIds.join(", ")}</li>
+                      )}
+                      {importSummary.invalidCampusBiometricIds.length > 0 && (
+                        <li>Invalid office for employee IDs: {importSummary.invalidCampusBiometricIds.join(", ")}</li>
+                      )}
+                      {importSummary.campusMismatchBiometricIds.length > 0 && (
+                        <li>Outside your office access for employee IDs: {importSummary.campusMismatchBiometricIds.join(", ")}</li>
+                      )}
+                    </ul>
+                  )}
+                  {importSummary.importedUsers.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      <p>Download includes employee ID, name, email, office, college, and role. Passwords are not included.</p>
+                      <button
+                        type="button"
+                        onClick={handleDownloadImportedUsers}
+                        className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-emerald-700"
+                      >
+                        <Download className="h-4 w-4" />
+                        Download Imported Accounts CSV
+                      </button>
+                    </div>
                   )}
                 </div>
               )}

@@ -27,6 +27,10 @@ export default function StaffDashboard() {
   const [attendanceSummaryError, setAttendanceSummaryError] = useState("");
   const [notificationError, setNotificationError] = useState("");
   const [attendanceRefreshKey, setAttendanceRefreshKey] = useState(0);
+  const [attendanceMonth, setAttendanceMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  });
   const [attendanceSummary, setAttendanceSummary] = useState({
     monthLabel: "Current Month",
     flexiTime: false,
@@ -80,9 +84,11 @@ export default function StaffDashboard() {
       }
 
       let summaryLoaded = false;
+      const [year, month] = attendanceMonth.split("-");
 
       try {
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/attendance/my-summary`, {
+        const summaryParams = new URLSearchParams({ year, month: String(Number(month)) });
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/attendance/my-summary?${summaryParams}`, {
           headers: {
             Authorization: `Bearer ${token}`
           }
@@ -144,7 +150,7 @@ export default function StaffDashboard() {
       window.removeEventListener("attendance-data-updated", handleAttendanceUpdate);
       clearInterval(refreshTimer);
     };
-  }, [attendanceRefreshKey]);
+  }, [attendanceRefreshKey, attendanceMonth]);
 
   const handleMarkNotificationRead = async (notification) => {
     if (notification.isRead) {
@@ -444,6 +450,23 @@ export default function StaffDashboard() {
                 </button>
               </div>
             )}
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <label className={`flex items-center gap-2 text-sm font-medium ${strongClass}`}>
+                Month
+                <input
+                  type="month"
+                  value={attendanceMonth}
+                  max={`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`}
+                  onChange={(event) => {
+                    if (event.target.value) {
+                      setAttendanceMonth(event.target.value);
+                    }
+                  }}
+                  className={`rounded-lg border px-3 py-2 ${isDarkMode ? "border-slate-600 bg-slate-800 text-white" : "border-slate-300 bg-white text-slate-800"}`}
+                />
+              </label>
+            </div>
 
             <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className={`rounded-[1.35rem] border p-4 ${isDarkMode ? "border-emerald-500/30 bg-emerald-500/10" : "border-emerald-100 bg-emerald-50"}`}>
